@@ -32,7 +32,7 @@ Ciel pairs a compiled C++20 Qt6 desktop client with a zero-dependency Go teamser
 
 ## Features
 
-- Single-command install (install.sh) and single-command launch (ciel auto-starts teamserver, Tempest, and Tanuki)
+- Single-command install (install.sh) and single-command launch (ciel auto-starts teamserver and allocates every Tempest and Tanuki module directly inside Ciel)
 - Native C++20 Qt6 desktop interface with zero browser wrappers
 - Multi-column identity topology graph with draggable operative and revoked nodes
 - Ten-column session matrix with live Event Viewer and raw telemetry inspection

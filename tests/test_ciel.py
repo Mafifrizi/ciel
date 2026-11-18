@@ -160,9 +160,10 @@ def main():
             print("[PASS] teamserver ping (bundled Tempest + Tanuki ready)")
 
             r_sync = rpc_call("127.0.0.1", port, {"action": "full_sync"})
-            assert r_sync["ok"] is True and len(r_sync["rows"]) == 4, r_sync
-            assert len(r_sync["logs"]) == 4
-            print("[PASS] teamserver full_sync (4 operative rows)")
+            assert r_sync["ok"] is True and len(r_sync["rows"]) == 5, r_sync
+            assert len(r_sync["logs"]) == 5
+            assert any(row["operative"] == "Tanuki" for row in r_sync["rows"]), r_sync
+            print("[PASS] teamserver full_sync (5 operative rows including Souei, Chronoa, Ranga, Tanuki)")
 
             r_souei = rpc_call("127.0.0.1", port, {"action": "souei_probe"})
             assert r_souei["exit_code"] in (0, 2)
@@ -170,6 +171,12 @@ def main():
             assert r_souei["data"]["kcm_socket"]["connected"] is True, r_souei
             assert r_souei["data"]["kcm_socket"]["peer_pid"] > 0, r_souei
             print("[PASS] teamserver souei_probe (keyring + AF_UNIX SO_PEERCRED)")
+
+            r_watch = rpc_call("127.0.0.1", port, {"action": "souei_watch"})
+            assert r_watch["exit_code"] == 0, r_watch
+            assert r_watch["data"]["inotify"]["watched"] is True, r_watch
+            assert len(r_watch["data"]["inotify"]["events"]) >= 1, r_watch
+            print("[PASS] teamserver souei_watch (live inotify access monitor)")
 
             r_ok = rpc_call("127.0.0.1", port, {"action": "chronoa_check", "skew_sec": 0})
             assert r_ok["exit_code"] == 0 and r_ok["status"] == "HEALTHY", r_ok
@@ -181,10 +188,13 @@ def main():
             r_rc4 = rpc_call("127.0.0.1", port, {"action": "chronoa_check", "weak_enctype": True})
             assert r_rc4["exit_code"] == 2 and r_rc4["status"] == "WEAK_ENCTYPE", r_rc4
 
+            r_exp = rpc_call("127.0.0.1", port, {"action": "chronoa_check", "expired_ticket": True})
+            assert r_exp["exit_code"] == 2 and r_exp["status"] == "EXPIRED", r_exp
+
             r_ren = rpc_call("127.0.0.1", port, {"action": "chronoa_check", "skew_sec": 0, "renew": True})
             assert r_ren["exit_code"] == 0 and r_ren["status"] == "RENEWED", r_ren
             assert r_ren["data"]["renewed"] is True and r_ren["data"]["ttl_sec"] > 6000
-            print("[PASS] teamserver chronoa_check (healthy, skew 350s, rc4 weak cipher, renew)")
+            print("[PASS] teamserver chronoa_check (healthy, skew 350s, rc4, expired, renew)")
 
             r_iso = rpc_call("127.0.0.1", port, {"action": "ranga_isolate"})
             assert r_iso["exit_code"] == 0 and r_iso["data"]["possessor_only"] is True
@@ -198,6 +208,13 @@ def main():
             assert r_prg["exit_code"] == 0 and r_prg["data"]["removed"] is True
             assert r_prg["data"]["passes"] == 3 and r_prg["data"]["wiped_bytes"] == 4096, r_prg
             print("[PASS] teamserver ranga_purge (3-pass NIST wipe)")
+
+            for subcmd in ("doctor", "fix", "keytab", "config", "triage", "ladder", "nhi", "token", "blast", "adcs", "pac", "shadow", "kcm", "skill", "purge"):
+                r_tan = rpc_call("127.0.0.1", port, {"action": "tanuki_exec", "subcommand": subcmd})
+                assert r_tan["ok"] is True, r_tan
+                assert r_tan["exit_code"] == 0, f"tanuki_exec {subcmd} failed: {r_tan}"
+                assert r_tan["rows"] and r_tan["rows"][0]["operative"] == "Tanuki", r_tan
+            print("[PASS] teamserver tanuki_exec (15 automated Tanuki modules + live auth/tgs/ldap dispatch)")
 
             env = os.environ.copy()
             env["QT_QPA_PLATFORM"] = "offscreen"

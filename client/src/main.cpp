@@ -19,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -35,6 +36,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -235,10 +237,16 @@ QIcon makeOperativeBadgeIcon(const QColor &accent, bool isHub = false) {
 QColor draculaStatusColor(const QString &status) {
     if (status == "OK" || status == "HEALTHY" || status == "ISOLATED" ||
         status == "RENEWED" || status == "PURGED" || status == "SYNCED" ||
-        status == "READY" || status == "ONLINE" || status == "VERIFIED") {
+        status == "READY" || status == "ONLINE" || status == "VERIFIED" ||
+        status == "SUCCESS" || status == "PASS" || status == "PARSED" ||
+        status == "MATCHED" || status == "5_RUNGS" || status == "NONE_DISCOVERED" ||
+        status == "CLEAN" || status == "DRY_RUN" || status == "LOW" ||
+        status == "EXTRACTED") {
         return QColor("#50fa7b");
     }
-    if (status == "EXPIRING_SOON" || status == "SHARED_KEYRING" || status == "ATTENTION") {
+    if (status == "EXPIRING_SOON" || status == "SHARED_KEYRING" ||
+        status == "ATTENTION" || status == "WARN" || status == "MEDIUM" ||
+        status == "FINDINGS" || status == "HIGH") {
         return QColor("#f1fa8c");
     }
     return QColor("#ff5555");
@@ -701,8 +709,18 @@ public:
         if (!executeAction("full_sync", QJsonObject(), syncResp)) {
             return fail("full_sync RPC failed");
         }
-        if (m_sessionTable->rowCount() < 4) {
-            return fail(QString("Expected >= 4 rows, got %1").arg(m_sessionTable->rowCount()));
+        if (m_sessionTable->rowCount() < 5) {
+            return fail(QString("Expected >= 5 rows, got %1").arg(m_sessionTable->rowCount()));
+        }
+
+        QJsonObject watchResp;
+        appendCommandEcho("souei --watch-file");
+        if (!executeAction("souei_watch", QJsonObject(), watchResp)) {
+            return fail("souei_watch RPC failed");
+        }
+        const QJsonObject inoObj = watchResp.value("data").toObject().value("inotify").toObject();
+        if (!inoObj.value("watched").toBool(false) || inoObj.value("events").toArray().isEmpty()) {
+            return fail("Expected live inotify events from souei_watch");
         }
 
         QJsonObject skewParams;
@@ -729,6 +747,18 @@ public:
             return fail("Expected exit_code=2 WEAK_ENCTYPE");
         }
 
+        QJsonObject expParams;
+        expParams["expired_ticket"] = true;
+        QJsonObject expResp;
+        appendCommandEcho("chronoa --expired");
+        if (!executeAction("chronoa_check", expParams, expResp)) {
+            return fail("chronoa_check expired_ticket RPC failed");
+        }
+        if (expResp.value("exit_code").toInt(-1) != 2 ||
+            expResp.value("status").toString() != "EXPIRED") {
+            return fail("Expected exit_code=2 EXPIRED");
+        }
+
         QJsonObject isoResp;
         appendCommandEcho("ranga --isolate 0x3f000000");
         if (!executeAction("ranga_isolate", QJsonObject(), isoResp)) {
@@ -753,13 +783,26 @@ public:
             return fail("Expected passes=3 and removed=true");
         }
 
+        for (const QString &tCmd : QStringList{"doctor", "config", "adcs", "pac", "shadow"}) {
+            QJsonObject tp;
+            tp["subcommand"] = tCmd;
+            QJsonObject tResp;
+            appendCommandEcho("tanuki " + tCmd);
+            if (!executeAction("tanuki_exec", tp, tResp)) {
+                return fail("tanuki_exec " + tCmd + " RPC failed");
+            }
+            if (tResp.value("exit_code").toInt(-1) != 0) {
+                return fail(QString("tanuki_exec %1 returned exit %2").arg(tCmd).arg(tResp.value("exit_code").toInt()));
+            }
+        }
+
         appendCommandEcho("sync");
         if (!executeAction("full_sync", QJsonObject(), syncResp)) {
             return fail("final full_sync RPC failed");
         }
         appendCommandEcho("audit");
         appendDetailedAuditTables();
-        if (m_sessionTable->rowCount() < 5 ||
+        if (m_sessionTable->rowCount() < 6 ||
             m_eventViewer->toPlainText().trimmed().isEmpty() ||
             m_operativeConsole->toPlainText().trimmed().isEmpty()) {
             return fail("Missing table rows or console telemetry after self-test");
@@ -870,15 +913,18 @@ private:
 
         QMenu *mOps = mb->addMenu("Operatives");
         QAction *actSouei = mOps->addAction("Souei: Probe /proc/keys");
+        QAction *actWatch = mOps->addAction("Souei: Watch Inotify Access");
         QAction *actChronoa = mOps->addAction("Chronoa: Audit CCACHE");
         QAction *actSkew = mOps->addAction("Chronoa: Simulate 350s Skew");
         QAction *actRc4 = mOps->addAction("Chronoa: Simulate RC4 Weak Cipher");
+        QAction *actExpired = mOps->addAction("Chronoa: Simulate Expired Ticket");
         QAction *actRenew = mOps->addAction("Chronoa: Force Renew");
         mOps->addSeparator();
         QAction *actIso = mOps->addAction("Ranga: Isolate 0x3f000000");
         QAction *actPurge = mOps->addAction("Ranga: 3-Pass NIST Purge");
 
         connect(actSouei, &QAction::triggered, this, [this]() { dispatchFromUi("souei_probe", QJsonObject(), "souei --probe"); });
+        connect(actWatch, &QAction::triggered, this, [this]() { dispatchFromUi("souei_watch", QJsonObject(), "souei --watch-file"); });
         connect(actChronoa, &QAction::triggered, this, [this]() {
             m_simSkewSec = 0;
             QJsonObject p;
@@ -896,6 +942,11 @@ private:
             p["weak_enctype"] = true;
             dispatchFromUi("chronoa_check", p, "chronoa --simulate-rc4");
         });
+        connect(actExpired, &QAction::triggered, this, [this]() {
+            QJsonObject p;
+            p["expired_ticket"] = true;
+            dispatchFromUi("chronoa_check", p, "chronoa --expired");
+        });
         connect(actRenew, &QAction::triggered, this, [this]() {
             m_simSkewSec = 0;
             QJsonObject p;
@@ -905,6 +956,45 @@ private:
         });
         connect(actIso, &QAction::triggered, this, [this]() { dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate"); });
         connect(actPurge, &QAction::triggered, this, [this]() { dispatchFromUi("ranga_purge", QJsonObject(), "ranga --purge"); });
+
+        QMenu *mTanuki = mb->addMenu("Tanuki");
+        auto addTanukiMenuItem = [&](const QString &label, const QString &subcmd, const QString &defaultArg = QString()) {
+            QAction *act = mTanuki->addAction(label);
+            connect(act, &QAction::triggered, this, [this, subcmd, defaultArg]() {
+                dispatchTanuki(subcmd, defaultArg);
+            });
+        };
+        auto addTanukiPromptItem = [&](const QString &label, const QString &subcmd, const QString &promptText, const QString &preset) {
+            QAction *act = mTanuki->addAction(label);
+            connect(act, &QAction::triggered, this, [this, label, subcmd, promptText, preset]() {
+                bool ok = false;
+                const QString val = QInputDialog::getText(this, label, promptText, QLineEdit::Normal, preset, &ok).trimmed();
+                if (ok && !val.isEmpty()) {
+                    dispatchTanuki(subcmd, val);
+                }
+            });
+        };
+        addTanukiMenuItem("Doctor: Pre-Flight & OPSEC Audit", "doctor");
+        addTanukiMenuItem("Fix: Self-Healing Engine (Dry-Run)", "fix");
+        addTanukiMenuItem("Keytab: Inspect RFC 4120 Binary", "keytab");
+        addTanukiMenuItem("Config: Generate Zero-DNS krb5.conf", "config");
+        mTanuki->addSeparator();
+        addTanukiPromptItem("Triage: Error Code Lookup...", "triage", "Kerberos / SSSD error query:", "SKEW");
+        addTanukiMenuItem("Ladder: 5-Rung Decision Ladder", "ladder");
+        addTanukiMenuItem("NHI: Workload & Cloud Mesh Scan", "nhi", "mesh");
+        addTanukiMenuItem("Token: Validate Workload JWT", "token");
+        mTanuki->addSeparator();
+        addTanukiMenuItem("Blast: AD Privilege & Tier Mapper", "blast");
+        addTanukiMenuItem("ADCS: Scan Templates (ESC1-11)", "adcs");
+        addTanukiMenuItem("PAC: Decode MS-PAC Privileges", "pac");
+        addTanukiMenuItem("Shadow: Inspect msDS-KeyCredentialLink", "shadow");
+        addTanukiMenuItem("KCM: Extract SSSD Credential Cache", "kcm");
+        mTanuki->addSeparator();
+        addTanukiPromptItem("Auth: Live AS-REQ Pre-Auth...", "auth", "Arguments (--keytab, --principal, --kdc):", "--keytab /tmp/ciel_workspace/service.keytab --principal ciel@TEMPEST.LOCAL");
+        addTanukiPromptItem("TGS: Live Service Ticket Request...", "tgs", "Arguments (--spn, --ccache, --kdc):", "--spn krbtgt/TEMPEST.LOCAL");
+        addTanukiPromptItem("LDAP: AD SPN / Delegation Query...", "ldap", "Arguments (--host, --realm, --query):", "--host dc01.tempest.local --realm TEMPEST.LOCAL --query spn");
+        addTanukiMenuItem("Purge: Wipe Credential Artifact", "purge");
+        addTanukiMenuItem("Skill: Inspect Tanuki Manifest", "skill");
 
         QMenu *mScripts = mb->addMenu("Scripts");
         QAction *actConsoleTab = mScripts->addAction("Operative Console");
@@ -968,7 +1058,7 @@ private:
             return te;
         };
         m_bottomTabs->addTab(
-            makeContextPane("[TEAMSERVER] ciel-teamserver active on " + m_serverAddr + "\n[TEAMSERVER] Tempest binaries verified: souei, chronoa, ranga, libranga.so"),
+            makeContextPane("[TEAMSERVER] ciel-teamserver active on " + m_serverAddr + "\n[TEAMSERVER] Tempest binaries verified: souei, chronoa, ranga, libranga.so\n[TEAMSERVER] Tanuki Identity Engine allocated and active in Ciel"),
             "Teamserver Chat");
         m_bottomTabs->addTab(
             makeContextPane("[OP-01] apip@linux-kernel :: /proc/keys + AF_UNIX SO_PEERCRED + inotify ready"),
@@ -983,6 +1073,9 @@ private:
         m_bottomTabs->addTab(
             makeContextPane("[OP-05] ranga@nist_purge :: 3-pass NIST SP 800-88 wipe + explicit_bzero"),
             "[OP-05] ranga@nist_purge");
+        m_bottomTabs->addTab(
+            makeContextPane("[OP-06] tanuki@nhi-engine :: doctor, fix, keytab, config, triage, ladder, nhi, token, blast, adcs, pac, shadow, kcm, auth, tgs, ldap"),
+            "[OP-06] tanuki@nhi-engine");
         m_listenersTabIdx = m_bottomTabs->addTab(buildListenersTab(), "Listeners");
         m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
 
@@ -1038,13 +1131,36 @@ private:
             QAction *aInteract = ctx.addAction("Interact");
             ctx.addSeparator();
             QAction *aSouei = ctx.addAction("Probe /proc/keys (Souei)");
+            QAction *aWatch = ctx.addAction("Watch Inotify Access (Souei)");
             QAction *aChronoa = ctx.addAction("Audit Ticket TTL (Chronoa)");
             QAction *aSkew = ctx.addAction("Simulate Skew 350s (Chronoa)");
             QAction *aRc4 = ctx.addAction("Simulate RC4 Weak Cipher (Chronoa)");
+            QAction *aExpired = ctx.addAction("Simulate Expired Ticket (Chronoa)");
             QAction *aRenew = ctx.addAction("Force Renew (Chronoa)");
             ctx.addSeparator();
             QAction *aIsolate = ctx.addAction("Isolate Session Keyring (Ranga)");
             QAction *aPurge = ctx.addAction("3-Pass NIST Purge (Ranga)");
+            ctx.addSeparator();
+            QMenu *tanukiSub = ctx.addMenu("Tanuki Identity Engine");
+            auto addCtxTanuki = [&](const QString &label, const QString &subcmd, const QString &arg = QString()) {
+                QAction *act = tanukiSub->addAction(label);
+                connect(act, &QAction::triggered, this, [this, subcmd, arg]() { dispatchTanuki(subcmd, arg); });
+            };
+            addCtxTanuki("Doctor Pre-Flight Audit", "doctor");
+            addCtxTanuki("Fix Self-Healing (Dry-Run)", "fix");
+            addCtxTanuki("Inspect Keytab (RFC 4120)", "keytab");
+            addCtxTanuki("Generate Zero-DNS krb5.conf", "config");
+            addCtxTanuki("Triage Error Code (SKEW)", "triage", "SKEW");
+            addCtxTanuki("5-Rung Decision Ladder", "ladder");
+            addCtxTanuki("NHI Cloud Mesh Scan", "nhi", "mesh");
+            addCtxTanuki("Validate Workload JWT", "token");
+            addCtxTanuki("Map AD Blast Radius", "blast");
+            addCtxTanuki("Scan ADCS Templates (ESC1-11)", "adcs");
+            addCtxTanuki("Decode MS-PAC Privileges", "pac");
+            addCtxTanuki("Decode Shadow Credentials", "shadow");
+            addCtxTanuki("Extract SSSD KCM Cache", "kcm");
+            addCtxTanuki("Inspect Tanuki Manifest", "skill");
+            ctx.addSeparator();
             QAction *aJson = ctx.addAction("Inspect Raw JSON");
 
             connect(aInteract, &QAction::triggered, this, [this]() {
@@ -1052,6 +1168,7 @@ private:
                 m_operativeInput->setFocus();
             });
             connect(aSouei, &QAction::triggered, this, [this]() { dispatchFromUi("souei_probe", QJsonObject(), "souei --probe"); });
+            connect(aWatch, &QAction::triggered, this, [this]() { dispatchFromUi("souei_watch", QJsonObject(), "souei --watch-file"); });
             connect(aChronoa, &QAction::triggered, this, [this]() {
                 QJsonObject p;
                 p["skew_sec"] = 0;
@@ -1066,6 +1183,11 @@ private:
                 QJsonObject p;
                 p["weak_enctype"] = true;
                 dispatchFromUi("chronoa_check", p, "chronoa --simulate-rc4");
+            });
+            connect(aExpired, &QAction::triggered, this, [this]() {
+                QJsonObject p;
+                p["expired_ticket"] = true;
+                dispatchFromUi("chronoa_check", p, "chronoa --expired");
             });
             connect(aRenew, &QAction::triggered, this, [this]() {
                 QJsonObject p;
@@ -1119,10 +1241,17 @@ private:
 
         m_operativeInput = new QLineEdit(panel);
         m_operativeInput->setObjectName("OperativeInput");
-        m_operativeInput->setPlaceholderText("Type command (help, audit, sync, souei, chronoa, skew 350, rc4, renew, isolate, purge, graph, table, clear)");
+        m_operativeInput->setPlaceholderText("Type command (help, audit, sync, souei, watch, chronoa, skew 350, rc4, expired, renew, isolate, purge, tanuki <cmd>, doctor, fix, keytab, config, triage, ladder, nhi, token, blast, adcs, pac, shadow, kcm, skill, graph, table, clear)");
         const QStringList cmds = {
-            "help", "audit", "sync", "souei", "chronoa", "skew 0", "skew 350",
-            "rc4", "renew", "isolate", "purge", "graph", "table", "clear"
+            "help", "audit", "sync", "souei", "watch", "chronoa", "skew 0", "skew 350",
+            "rc4", "expired", "renew", "isolate", "purge",
+            "tanuki doctor", "tanuki fix", "tanuki keytab", "tanuki config",
+            "tanuki triage SKEW", "tanuki ladder", "tanuki nhi mesh", "tanuki token",
+            "tanuki blast", "tanuki adcs", "tanuki pac", "tanuki shadow",
+            "tanuki kcm", "tanuki skill", "doctor", "fix", "keytab", "config",
+            "triage SKEW", "ladder", "nhi", "token", "blast", "adcs",
+            "pac", "shadow", "kcm", "skill", "auth", "tgs", "ldap",
+            "graph", "table", "clear"
         };
         auto *completer = new QCompleter(cmds, m_operativeInput);
         completer->setCaseSensitivity(Qt::CaseInsensitive);
@@ -1145,7 +1274,7 @@ private:
         vbox->setContentsMargins(4, 4, 4, 6);
         vbox->setSpacing(6);
 
-        auto *listenersTable = new QTableWidget(4, 6, panel);
+        auto *listenersTable = new QTableWidget(5, 6, panel);
         listenersTable->setShowGrid(false);
         listenersTable->verticalHeader()->setVisible(false);
         listenersTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1159,7 +1288,8 @@ private:
             {"ciel-teamserver-rpc", "TCP/JSON", "127.0.0.1", "40056", "40056", "ONLINE"},
             {"souei-keyring-sensor", "ProcKeys/SO_PEERCRED", "kcm.sock", "0", "0", "ONLINE"},
             {"chronoa-ccache-guard", "MIT-CCACHE-v4", "TEMPEST.LOCAL", "88", "88", "ONLINE"},
-            {"ranga-keyring-jail", "SYS_keyctl", "kernel-ses", "0", "0", "ONLINE"}
+            {"ranga-keyring-jail", "SYS_keyctl", "kernel-ses", "0", "0", "ONLINE"},
+            {"tanuki-nhi-engine", "NHI/Kerberos/AD", "127.0.0.1", "0", "0", "ONLINE"}
         };
         for (int r = 0; r < defaults.size(); ++r) {
             for (int c = 0; c < 6; ++c) {
@@ -1173,35 +1303,59 @@ private:
         }
         vbox->addWidget(listenersTable, 1);
 
-        auto *btnBar = new QHBoxLayout();
-        btnBar->addStretch(1);
-        auto addActionBtn = [&](const QString &label, auto fn) {
+        auto addActionBtn = [&](QHBoxLayout *rowLayout, const QString &label, auto fn) {
             auto *btn = new QPushButton(label, panel);
             connect(btn, &QPushButton::clicked, this, fn);
-            btnBar->addWidget(btn);
+            rowLayout->addWidget(btn);
         };
-        addActionBtn("Sync", [this]() { runFullSync(); });
-        addActionBtn("Souei Probe", [this]() { dispatchFromUi("souei_probe", QJsonObject(), "souei --probe"); });
-        addActionBtn("Chronoa Skew 350s", [this]() {
+
+        auto *btnBarTempest = new QHBoxLayout();
+        btnBarTempest->addStretch(1);
+        addActionBtn(btnBarTempest, "Sync All", [this]() { runFullSync(); });
+        addActionBtn(btnBarTempest, "Souei Probe", [this]() { dispatchFromUi("souei_probe", QJsonObject(), "souei --probe"); });
+        addActionBtn(btnBarTempest, "Souei Watch", [this]() { dispatchFromUi("souei_watch", QJsonObject(), "souei --watch-file"); });
+        addActionBtn(btnBarTempest, "Chronoa Skew", [this]() {
             QJsonObject p;
             p["skew_sec"] = 350;
             dispatchFromUi("chronoa_check", p, "chronoa --skew 350");
         });
-        addActionBtn("Chronoa RC4", [this]() {
+        addActionBtn(btnBarTempest, "Chronoa RC4", [this]() {
             QJsonObject p;
             p["weak_enctype"] = true;
             dispatchFromUi("chronoa_check", p, "chronoa --simulate-rc4");
         });
-        addActionBtn("Chronoa Renew", [this]() {
+        addActionBtn(btnBarTempest, "Chronoa Expired", [this]() {
+            QJsonObject p;
+            p["expired_ticket"] = true;
+            dispatchFromUi("chronoa_check", p, "chronoa --expired");
+        });
+        addActionBtn(btnBarTempest, "Chronoa Renew", [this]() {
             QJsonObject p;
             p["skew_sec"] = 0;
             p["renew"] = true;
             dispatchFromUi("chronoa_check", p, "chronoa --renew");
         });
-        addActionBtn("Ranga Isolate", [this]() { dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate"); });
-        addActionBtn("Ranga 3-Pass Purge", [this]() { dispatchFromUi("ranga_purge", QJsonObject(), "ranga --purge"); });
-        btnBar->addStretch(1);
-        vbox->addLayout(btnBar);
+        addActionBtn(btnBarTempest, "Ranga Isolate", [this]() { dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate"); });
+        addActionBtn(btnBarTempest, "Ranga Purge", [this]() { dispatchFromUi("ranga_purge", QJsonObject(), "ranga --purge"); });
+        btnBarTempest->addStretch(1);
+        vbox->addLayout(btnBarTempest);
+
+        auto *btnBarTanuki = new QHBoxLayout();
+        btnBarTanuki->addStretch(1);
+        addActionBtn(btnBarTanuki, "Tanuki Doctor", [this]() { dispatchTanuki("doctor"); });
+        addActionBtn(btnBarTanuki, "Tanuki Fix", [this]() { dispatchTanuki("fix"); });
+        addActionBtn(btnBarTanuki, "Tanuki Keytab", [this]() { dispatchTanuki("keytab"); });
+        addActionBtn(btnBarTanuki, "Tanuki Config", [this]() { dispatchTanuki("config"); });
+        addActionBtn(btnBarTanuki, "Tanuki Triage", [this]() { dispatchTanuki("triage", "SKEW"); });
+        addActionBtn(btnBarTanuki, "Tanuki Ladder", [this]() { dispatchTanuki("ladder"); });
+        addActionBtn(btnBarTanuki, "Tanuki NHI", [this]() { dispatchTanuki("nhi", "mesh"); });
+        addActionBtn(btnBarTanuki, "Tanuki Blast", [this]() { dispatchTanuki("blast"); });
+        addActionBtn(btnBarTanuki, "Tanuki ADCS", [this]() { dispatchTanuki("adcs"); });
+        addActionBtn(btnBarTanuki, "Tanuki PAC", [this]() { dispatchTanuki("pac"); });
+        addActionBtn(btnBarTanuki, "Tanuki Shadow", [this]() { dispatchTanuki("shadow"); });
+        addActionBtn(btnBarTanuki, "Tanuki KCM", [this]() { dispatchTanuki("kcm"); });
+        btnBarTanuki->addStretch(1);
+        vbox->addLayout(btnBarTanuki);
 
         return panel;
     }
@@ -1291,31 +1445,35 @@ private:
             "\n"
             "  Command         Arguments        Description\n"
             "  -------         ---------        -----------\n"
-            "  sync                             Full telemetry sweep across Souei, Chronoa, and Ranga\n"
-            "  souei                            Probe /proc/keys ACLs and session keyring baseline\n"
+            "  sync                             Full sweep across Souei, Chronoa, Ranga, and Tanuki\n"
+            "  souei / watch                    Probe /proc/keys ACLs, SO_PEERCRED, and live inotify watch\n"
             "  chronoa                          Evaluate MIT CCACHE v4 lifetimes and cipher strength\n"
             "  skew            &lt;sec&gt;        Simulate KDC clock drift against RFC 4120 300s ceiling\n"
-            "  rc4                              Simulate weak RC4-HMAC ticket policy stop (exit 2)\n"
+            "  rc4 / expired                    Simulate RC4 weak cipher or expired TGT (exit 2)\n"
             "  renew                            Trigger pre-expiry CCACHE renewal hook\n"
-            "  isolate                          Verify LD_PRELOAD possessor-only (0x3f000000) session\n"
-            "  purge                            Execute 3-pass NIST SP 800-88 file wipe on secret target\n"
-            "  audit                            Print full Kerberos & Kernel Keyring verification matrix\n"
-            "  graph / table                    Switch main viewport between Topology Graph and Sessions\n";
+            "  isolate / purge                  Verify 0x3f000000 session jail or 3-pass NIST purge\n"
+            "  tanuki          &lt;subcmd&gt;     Execute any Tanuki NHI engine module inside Ciel\n"
+            "  doctor / fix / keytab / config   Run Tanuki pre-flight audit, dry-run fix, keytab, krb5.conf\n"
+            "  triage / ladder / nhi / token    Lookup KRB5 errors, 5-rung ladder, NHI mesh, JWT check\n"
+            "  blast / adcs / pac / shadow      AD blast radius, ESC1-11 scanner, PAC, shadow credentials\n"
+            "  kcm / auth / tgs / ldap / skill  SSSD KCM extraction, AS-REQ, TGS, LDAP, skill manifest\n"
+            "  audit / graph / table / clear    Print audit matrix or switch Sessions / Session Graph\n";
         appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(tableText));
     }
 
     void appendDetailedAuditTables() {
-        appendTaskInfo("Tasked operative to audit Kerberos CCACHE and Linux Kernel Keyring...");
-        appendTaskDone("Operative returned 1,420 bytes of verified runtime telemetry:");
+        appendTaskInfo("Tasked operatives to audit Kerberos CCACHE, Kernel Keyring, and Tanuki NHI Engine...");
+        appendTaskDone("Operatives returned verified runtime telemetry:");
         const QString auditText =
             "\n"
             "  ITEM / PRINCIPAL                        SUBSYSTEM         SERIAL / ENCTYPE              POLICY &amp; RUNTIME VERDICT\n"
             "  ================                        =========         ================              ========================\n"
             "  krbtgt/TEMPEST.LOCAL@TEMPEST.LOCAL      MIT CCACHE v4     aes256-cts-hmac-sha1-96 (18)  Healthy TGT, RFC 4120 skew &lt;= 300s enforced\n"
-            "  kcm.sock (SO_PEERCRED)                  AF_UNIX Socket    mode 0600 (owner rw)          Resolved live daemon peer_pid + UID match\n"
+            "  kcm.sock (SO_PEERCRED + inotify)        AF_UNIX Socket    mode 0600 (owner rw)          Resolved live daemon peer_pid + access watch\n"
             "  _uid_ses.1000 (/proc/keys)              Kernel Keyring    perm 0x1f3f0000               Warning: shared UID access across processes\n"
             "  _ses (LD_PRELOAD=libranga.so)           SYS_keyctl        perm 0x3f000000               Isolated possessor-only session keyring OK\n"
-            "  PurgeTarget.keytab                      NIST SP 800-88    3-pass + explicit_bzero       Verified 4096B overwrite and clean unlink\n";
+            "  PurgeTarget.keytab                      NIST SP 800-88    3-pass + explicit_bzero       Verified 4096B overwrite and clean unlink\n"
+            "  service.keytab (Tanuki Engine)          NHI / AD / ADCS   keytab + pac + esc1-11        All 18 Tanuki modules allocated inside Ciel\n";
         appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(auditText));
     }
 
@@ -1323,6 +1481,20 @@ private:
         appendCommandEcho(echoLabel);
         QJsonObject resp;
         executeAction(action, params, resp);
+    }
+
+    void dispatchTanuki(const QString &subcmd, const QString &arg = QString(), const QStringList &extraArgs = QStringList()) {
+        QJsonObject p;
+        p["subcommand"] = subcmd;
+        QString label = "tanuki " + subcmd;
+        if (!extraArgs.isEmpty()) {
+            p["args"] = QJsonArray::fromStringList(extraArgs);
+            label += " " + extraArgs.join(' ');
+        } else if (!arg.isEmpty()) {
+            p["target_arg"] = arg;
+            label += " " + arg;
+        }
+        dispatchFromUi("tanuki_exec", p, label);
     }
 
     void handleOperativeCommand(const QString &raw) {
@@ -1361,6 +1533,11 @@ private:
             executeAction("souei_probe", QJsonObject(), resp);
             return;
         }
+        if (raw == "watch") {
+            QJsonObject resp;
+            executeAction("souei_watch", QJsonObject(), resp);
+            return;
+        }
         if (raw == "chronoa") {
             QJsonObject p;
             p["skew_sec"] = m_simSkewSec;
@@ -1389,6 +1566,13 @@ private:
             executeAction("chronoa_check", p, resp);
             return;
         }
+        if (raw == "expired") {
+            QJsonObject p;
+            p["expired_ticket"] = true;
+            QJsonObject resp;
+            executeAction("chronoa_check", p, resp);
+            return;
+        }
         if (raw == "renew") {
             QJsonObject p;
             p["skew_sec"] = 0;
@@ -1407,6 +1591,38 @@ private:
             executeAction("ranga_purge", QJsonObject(), resp);
             return;
         }
+
+        static const QStringList tanukiDirect = {
+            "doctor", "fix", "keytab", "config", "triage", "ladder", "nhi",
+            "token", "blast", "adcs", "pac", "shadow", "kcm", "skill",
+            "auth", "tgs", "ldap"
+        };
+        const QStringList tokens = raw.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (!tokens.isEmpty() && (tokens[0].compare("tanuki", Qt::CaseInsensitive) == 0 ||
+                                  tanukiDirect.contains(tokens[0].toLower()))) {
+            QString subcmd = "doctor";
+            QStringList rest;
+            if (tokens[0].compare("tanuki", Qt::CaseInsensitive) == 0) {
+                if (tokens.size() >= 2) {
+                    subcmd = tokens[1].toLower();
+                    rest = tokens.mid(2);
+                }
+            } else {
+                subcmd = tokens[0].toLower();
+                rest = tokens.mid(1);
+            }
+            QJsonObject p;
+            p["subcommand"] = subcmd;
+            if (rest.size() == 1 && !rest[0].startsWith('-')) {
+                p["target_arg"] = rest[0];
+            } else if (!rest.isEmpty()) {
+                p["args"] = QJsonArray::fromStringList(rest);
+            }
+            QJsonObject resp;
+            executeAction("tanuki_exec", p, resp);
+            return;
+        }
+
         appendTaskAlert("Unknown command: " + raw + " (run 'help')");
     }
 
@@ -1445,6 +1661,9 @@ private:
         if (snap.operative == "Souei" || snap.operative == "Ranga") {
             userCol = "apip (1000)";
             realmCol = "linux-kernel";
+        } else if (snap.operative == "Tanuki") {
+            userCol = "nhi-engine";
+            realmCol = "TEMPEST.LOCAL";
         }
 
         const QStringList cells = {
@@ -1499,14 +1718,19 @@ private:
             const bool exists = m_snapshots.contains(opId);
             const OperativeSnapshot s = exists ? m_snapshots.value(opId) : OperativeSnapshot{};
             QString opName = exists ? s.operative.toLower() : roleTag.split('-').first();
-            if (opId == "OP-06") {
+            QString targetLabel = defaultTarget;
+            if (opId == "OP-06" && exists && !s.module.isEmpty()) {
+                targetLabel = s.module;
+            } else if (opId == "REV-01") {
                 opName = "kcm";
             } else if (opId == "OP-07") {
-                opName = "chronoa";
+                opName = "tanuki";
             } else if (opId == "OP-08") {
+                opName = "chronoa";
+            } else if (opId == "OP-09") {
                 opName = "ranga";
             }
-            const QString line1 = QString("%1 @ %2\\%3").arg(opId, opName, defaultTarget);
+            const QString line1 = QString("%1 @ %2\\%3").arg(opId, opName, targetLabel);
             const QString stStr = !overrideStatus.isEmpty() ? overrideStatus : (exists ? s.status : "ONLINE");
             const QString line2 = QString("[%1 :: %2]").arg(realmUser, stStr);
             const QColor stCol = revokedGray ? QColor("#6272a4") : draculaStatusColor(stStr);
@@ -1525,30 +1749,32 @@ private:
             return node;
         };
 
-        // Col 1: Primary Telemetry Daemons (green callback arrows INTO Root Firewall)
-        auto *op1 = addMonitor("OP-01", "1000", "souei", "linux-kernel\\apip", QPointF(345.0, 52.0), true, false);
-        auto *op2 = addMonitor("OP-02", "krbtgt", "chronoa", "TEMPEST.LOCAL\\ciel", QPointF(345.0, 168.0), false, false);
-        auto *op3 = addMonitor("OP-03", "uid_ses", "ranga-shared", "linux-kernel\\apip", QPointF(345.0, 284.0), false, false);
+        // Col 1: Primary Daemons + Tanuki Identity Engine (green callback arrows INTO Root Firewall)
+        auto *op1 = addMonitor("OP-01", "1000", "souei", "linux-kernel\\apip", QPointF(335.0, 52.0), true, false);
+        auto *op2 = addMonitor("OP-02", "krbtgt", "chronoa", "TEMPEST.LOCAL\\ciel", QPointF(335.0, 168.0), false, false);
+        auto *op6 = addMonitor("OP-06", "doctor", "tanuki", "TEMPEST.LOCAL\\nhi", QPointF(335.0, 284.0), false, false);
 
         m_graphScene->addItem(new CielGraphEdge(rootNode, op1, QColor("#50fa7b"), "netlink", true));
         m_graphScene->addItem(new CielGraphEdge(rootNode, op2, QColor("#50fa7b"), "ccache", true));
-        m_graphScene->addItem(new CielGraphEdge(rootNode, op3, QColor("#50fa7b"), "keyctl", true));
+        m_graphScene->addItem(new CielGraphEdge(rootNode, op6, QColor("#50fa7b"), "nhi-rpc", true));
 
-        // Col 2: Derived Isolation, Purge & Revoked Edges
-        auto *op4 = addMonitor("OP-04", "0x3f000000", "ranga-iso", "linux-kernel\\apip", QPointF(625.0, 52.0), false, false);
-        auto *op5 = addMonitor("OP-05", "nist_purge", "ranga-purge", "TEMPEST.LOCAL\\apip", QPointF(625.0, 168.0), true, false);
-        auto *op6 = addMonitor("OP-06", "revoked_tkt", "ranga-shared", "TEMPEST.LOCAL\\old", QPointF(625.0, 284.0), false, true, "REVOKED");
+        // Col 2: Derived Kernel Isolation, Baseline & Tanuki AD/ADCS Analysis
+        auto *op4 = addMonitor("OP-04", "0x3f000000", "ranga-iso", "linux-kernel\\apip", QPointF(615.0, 52.0), false, false);
+        auto *op3 = addMonitor("OP-03", "uid_ses", "ranga-shared", "linux-kernel\\apip", QPointF(615.0, 168.0), false, false);
+        auto *op7 = addMonitor("OP-07", "adcs_pac", "tanuki", "TEMPEST.LOCAL\\ad", QPointF(615.0, 284.0), false, false, "VERIFIED");
 
         m_graphScene->addItem(new CielGraphEdge(op1, op4, QColor("#bd93f9"), "LD_PRELOAD", false));
-        m_graphScene->addItem(new CielGraphEdge(op2, op5, QColor("#bd93f9"), "nist/800", false));
-        m_graphScene->addItem(new CielGraphEdge(op2, op6, QColor("#ff5555"), "revoked", false));
+        m_graphScene->addItem(new CielGraphEdge(op2, op3, QColor("#bd93f9"), "keyctl", false));
+        m_graphScene->addItem(new CielGraphEdge(op6, op7, QColor("#bd93f9"), "esc/pac", false));
 
-        // Col 3: Verified Identity Leaf Targets
-        auto *op7 = addMonitor("OP-07", "aes256_tgt", "chronoa", "TEMPEST.LOCAL\\tgt", QPointF(890.0, 100.0), false, false, "VERIFIED");
-        auto *op8 = addMonitor("OP-08", "wiped_keytab", "ranga-purge", "TEMPEST.LOCAL\\fs", QPointF(890.0, 236.0), true, false, "PURGED");
+        // Col 3: Verified Targets, NIST Purge & Revoked Edges
+        auto *op8 = addMonitor("OP-08", "aes256_tgt", "chronoa", "TEMPEST.LOCAL\\tgt", QPointF(890.0, 52.0), false, false, "VERIFIED");
+        auto *op5 = addMonitor("OP-05", "nist_purge", "ranga-purge", "TEMPEST.LOCAL\\fs", QPointF(890.0, 168.0), true, false);
+        auto *opRev = addMonitor("REV-01", "revoked_tkt", "ranga-shared", "TEMPEST.LOCAL\\old", QPointF(890.0, 284.0), false, true, "REVOKED");
 
-        m_graphScene->addItem(new CielGraphEdge(op4, op7, QColor("#bd93f9"), "aes256", false));
-        m_graphScene->addItem(new CielGraphEdge(op5, op8, QColor("#bd93f9"), "3-pass", false));
+        m_graphScene->addItem(new CielGraphEdge(op4, op8, QColor("#bd93f9"), "aes256", false));
+        m_graphScene->addItem(new CielGraphEdge(op3, op5, QColor("#bd93f9"), "nist/800", false));
+        m_graphScene->addItem(new CielGraphEdge(op3, opRev, QColor("#ff5555"), "revoked", false));
 
         m_graphScene->setSceneRect(0.0, 0.0, 1020.0, 368.0);
         m_graphView->centerOn(510.0, 184.0);
@@ -1704,7 +1930,7 @@ private:
     QString m_serverAddr;
     int m_simSkewSec = 0;
     int m_consoleTabIdx = 2;
-    int m_listenersTabIdx = 6;
+    int m_listenersTabIdx = 7;
 
     QTabWidget *m_mainViewTabs = nullptr;
     QTableWidget *m_sessionTable = nullptr;
