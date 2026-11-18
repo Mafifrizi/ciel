@@ -139,3 +139,11 @@ Run automated end-to-end UI verification without an active display server:
 ```bash
 QT_QPA_PLATFORM=offscreen ./bin/ciel --addr 127.0.0.1:40056 --self-test --screenshot table.png --graph-screenshot graph.png
 ```
+
+## Interface Snapshots
+
+- [Sessions Matrix, Event Viewer & Context Tabs](../assets/SessionsOverview.png)
+- [Interactive Session Graph](../assets/FullSessionGraph.png)
+- [Listeners, Field Target Paths & Raw JSON](../assets/ListenersAndTelemetry.png)
+- [Operative Console & Audit Matrix](../assets/OperativeConsole.png)
+- [Multi-Window Control Showcase](../assets/MultiSessionControl.png)
