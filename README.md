@@ -30,7 +30,7 @@
 
 ## What Ciel Is For
 
-Ciel is a compiled C++20 Qt6 desktop operator console backed by a zero-dependency Go teamserver. It gives Linux identity operators, Purple Team engineers, and unprivileged workload defenders a unified live view over:
+Ciel is a compiled C++20 Qt6 desktop console backed by a zero-dependency Go teamserver. It provides direct inspection and control over:
 
 1. **Linux Kernel Keyring & Socket Boundaries ([Tempest](https://github.com/Mafifrizi/tempest))**:
    - `OP-01` **Souei**: Audits `/proc/keys` ACLs, active session keyring permissions, `AF_UNIX` `SO_PEERCRED` on SSSD/Heimdal KCM sockets, and real-time `inotify` file access events.
@@ -39,7 +39,7 @@ Ciel is a compiled C++20 Qt6 desktop operator console backed by a zero-dependenc
 2. **Non-Human Identity (NHI), Kerberos & Active Directory Analysis ([Tanuki](https://github.com/Mafifrizi/tanuki))**:
    - `OP-06` **Tanuki**: Orchestrates all 18 Tanuki modules directly inside Ciel (`doctor`, `fix`, `keytab`, `config`, `triage`, `ladder`, `nhi`, `token`, `blast`, `adcs`, `pac`, `shadow`, `kcm`, `auth`, `tgs`, `ldap`, `purge`, `skill`).
 
-All views read live host telemetry, kernel interfaces, and Kerberos/LDAP endpoints directly without browser runtimes, shell wrappers, or synthetic demo data.
+All views read directly from live kernel interfaces, credential caches, and Kerberos/LDAP endpoints, with no browser runtime or synthetic demo data.
 
 ## Quick Start (From Zero to First Audit)
 

@@ -122,25 +122,26 @@ def frame_desktop_window(shot_img, title_text, icon_path):
     return framed
 
 
-def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot):
-    ASSETS.mkdir(parents=True, exist_ok=True)
+def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     icon_path = ASSETS / "ciel_icon.png"
 
     im_graph = Image.open(graph_shot)
     framed_graph = frame_desktop_window(im_graph, "Ciel | Session Graph", icon_path)
-    out_graph = ASSETS / "FullSessionGraph.png"
+    out_graph = out_dir / "FullSessionGraph.png"
     framed_graph.convert("RGB").save(out_graph, format="PNG")
 
     im_table = frame_desktop_window(Image.open(table_shot), "Ciel | Session Control", icon_path)
-    out_sessions = ASSETS / "SessionsOverview.png"
+    out_sessions = out_dir / "SessionsOverview.png"
     im_table.convert("RGB").save(out_sessions, format="PNG")
 
     im_alt = frame_desktop_window(Image.open(alt_shot), "Ciel | Telemetry & Listeners", icon_path)
-    out_listeners = ASSETS / "ListenersAndTelemetry.png"
+    out_listeners = out_dir / "ListenersAndTelemetry.png"
     im_alt.convert("RGB").save(out_listeners, format="PNG")
 
     im_console = frame_desktop_window(Image.open(console_shot), "Ciel | Operative Console", icon_path)
-    out_console = ASSETS / "OperativeConsole.png"
+    out_console = out_dir / "OperativeConsole.png"
     im_console.convert("RGB").save(out_console, format="PNG")
 
     win_w, win_h = 1220, int(1220 * im_table.height / im_table.width)
@@ -160,7 +161,7 @@ def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot):
     canvas = Image.alpha_composite(canvas, shadow)
     canvas.paste(front_res, (fx, fy), front_res)
 
-    out_multi = ASSETS / "MultiSessionControl.png"
+    out_multi = out_dir / "MultiSessionControl.png"
     canvas.convert("RGB").save(out_multi, format="PNG")
     return out_graph, out_multi, out_sessions, out_listeners, out_console
 
@@ -211,15 +212,11 @@ def main():
 
     port = pick_free_port()
     addr = f"127.0.0.1:{port}"
-    shot_path = Path("/tmp/ciel_preview.png")
-    graph_shot_path = Path("/tmp/ciel_graph_preview.png")
-    alt_shot_path = Path("/tmp/ciel_alt_preview.png")
-    con_shot_path = Path("/tmp/ciel_console_preview.png")
-    for p in (shot_path, graph_shot_path, alt_shot_path, con_shot_path):
-        if p.exists():
-            p.unlink()
-
     with tempfile.TemporaryDirectory() as work_dir, tempfile.TemporaryDirectory() as fix_dir:
+        shot_path = Path(fix_dir) / "ciel_preview.png"
+        graph_shot_path = Path(fix_dir) / "ciel_graph_preview.png"
+        alt_shot_path = Path(fix_dir) / "ciel_alt_preview.png"
+        con_shot_path = Path(fix_dir) / "ciel_console_preview.png"
         token_file = Path(work_dir) / "teamserver.token"
         srv = subprocess.Popen(
             [TEAMSERVER, "--addr", addr, "--work-dir", work_dir],
@@ -493,9 +490,13 @@ def main():
                 assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{label} is not a valid PNG"
                 print(f"[PASS] native Qt6 ciel-client --self-test {label} ({len(raw)} bytes)")
 
+            showcase_dir = ASSETS if os.environ.get("CIEL_UPDATE_ASSETS") == "1" else Path(fix_dir) / "showcase"
             out_graph, out_multi, out_sessions, out_listeners, out_console = compose_showcase_images(
-                shot_path, graph_shot_path, alt_shot_path, con_shot_path
+                shot_path, graph_shot_path, alt_shot_path, con_shot_path, showcase_dir
             )
+            for out_p in (out_graph, out_multi, out_sessions, out_listeners, out_console):
+                assert out_p.exists() and out_p.stat().st_size > 10000, f"Missing or tiny showcase {out_p}"
+                assert out_p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", f"{out_p} is not a valid PNG"
             print(f"[PASS] showcase FullSessionGraph.png ({out_graph.stat().st_size} bytes)")
             print(f"[PASS] showcase MultiSessionControl.png ({out_multi.stat().st_size} bytes)")
             print(f"[PASS] showcase SessionsOverview.png ({out_sessions.stat().st_size} bytes)")
