@@ -1633,7 +1633,7 @@ int main(int argc, char **argv) {
         QCoreApplication::applicationDirPath() + "/../assets/ciel_icon.png",
         QCoreApplication::applicationDirPath() + "/assets/ciel_icon.png",
         "assets/ciel_icon.png",
-        "/mnt/c/Users/Ely/.gemini/antigravity/scratch/ciel/assets/ciel_icon.png"
+        "../assets/ciel_icon.png"
     };
     QIcon appIcon;
     for (const QString &ip : iconPaths) {

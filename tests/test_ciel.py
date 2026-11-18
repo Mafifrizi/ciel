@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -16,9 +15,7 @@ BIN = ROOT / "bin"
 ASSETS = ROOT / "assets"
 TEAMSERVER = str(BIN / "ciel-teamserver")
 CLIENT = str(BIN / "ciel-client")
-TEMPEST_BIN = Path("/mnt/c/Users/Ely/.gemini/antigravity/scratch/tempest/bin")
-ARTIFACT_SHOT = Path("/mnt/c/Users/Ely/.gemini/antigravity/brain/f6ca982c-a8c1-47a9-856f-cf48a55292f3/ciel_preview.png")
-ARTIFACT_GRAPH_SHOT = Path("/mnt/c/Users/Ely/.gemini/antigravity/brain/f6ca982c-a8c1-47a9-856f-cf48a55292f3/ciel_graph_preview.png")
+TEMPEST_BIN = Path(os.environ.get("TEMPEST_BIN_DIR", str(ROOT.parent / "tempest" / "bin")))
 
 
 def load_ui_font(size=14):
@@ -222,9 +219,6 @@ def main():
                 print(f"[PASS] native Qt6 ciel-client --self-test {label} ({len(raw)} bytes)")
 
             out_graph, out_multi = compose_showcase_images(shot_path, graph_shot_path, alt_shot_path)
-            ARTIFACT_SHOT.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(out_graph, ARTIFACT_GRAPH_SHOT)
-            shutil.copyfile(out_multi, ARTIFACT_SHOT)
             print(f"[PASS] showcase FullSessionGraph.png ({out_graph.stat().st_size} bytes)")
             print(f"[PASS] showcase MultiSessionControl.png ({out_multi.stat().st_size} bytes)")
         finally:

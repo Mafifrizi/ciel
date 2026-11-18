@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const defaultTempestDir = "/mnt/c/Users/Ely/.gemini/antigravity/scratch/tempest/bin"
+const defaultTempestDir = "../tempest/bin"
 
 type Request struct {
 	Action        string `json:"action"`
@@ -639,6 +639,9 @@ func main() {
 	if defaultDir == "" {
 		defaultDir = defaultTempestDir
 	}
+	if absDir, err := filepath.Abs(defaultDir); err == nil {
+		defaultDir = absDir
+	}
 
 	addr := flag.String("addr", "127.0.0.1:40056", "TCP listen address for Qt desktop clients")
 	tempestDir := flag.String("tempest-dir", defaultDir, "Directory containing built Tempest binaries")
@@ -659,8 +662,19 @@ func main() {
 		selfExe = os.Args[0]
 	}
 
+	resolvedTempestDir := *tempestDir
+	if absTempest, absErr := filepath.Abs(resolvedTempestDir); absErr == nil {
+		resolvedTempestDir = absTempest
+	}
+	if _, statErr := os.Stat(resolvedTempestDir); os.IsNotExist(statErr) && os.Getenv("TEMPEST_BIN_DIR") == "" {
+		exeSibling := filepath.Clean(filepath.Join(filepath.Dir(selfExe), "..", "..", "tempest", "bin"))
+		if _, sibErr := os.Stat(exeSibling); sibErr == nil {
+			resolvedTempestDir = exeSibling
+		}
+	}
+
 	srv := &Server{
-		tempestDir: *tempestDir,
+		tempestDir: resolvedTempestDir,
 		workDir:    *workDir,
 		selfExe:    selfExe,
 	}
