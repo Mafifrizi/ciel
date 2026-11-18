@@ -33,6 +33,7 @@ Ciel pairs a compiled C++20 Qt6 desktop client with a zero-dependency Go teamser
 
 ## Features
 
+- Single-command bootstrap (install.sh or make install) that pulls and installs Tempest and Tanuki alongside Ciel
 - Native C++20 Qt6 desktop interface with zero browser wrappers
 - Multi-column identity topology graph with draggable operative and revoked nodes
 - Ten-column session matrix with live Event Viewer and raw telemetry inspection

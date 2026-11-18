@@ -500,7 +500,7 @@ func (s *Server) handleRequest(req Request) Response {
 	switch req.Action {
 	case "ping":
 		bins := []string{"souei", "chronoa", "ranga", "libranga.so"}
-		present := make(map[string]bool, len(bins))
+		present := make(map[string]bool, len(bins)+1)
 		allReady := true
 		for _, b := range bins {
 			_, err := os.Stat(filepath.Join(s.tempestDir, b))
@@ -510,6 +510,15 @@ func (s *Server) handleRequest(req Request) Response {
 				allReady = false
 			}
 		}
+		tanukiOK := false
+		for _, dir := range []string{s.tempestDir, filepath.Dir(s.selfExe)} {
+			if _, err := os.Stat(filepath.Join(dir, "tanuki")); err == nil {
+				tanukiOK = true
+				break
+			}
+		}
+		present["tanuki"] = tanukiOK
+
 		resp.OK = allReady
 		resp.Status = "READY"
 		if !allReady {
@@ -663,14 +672,21 @@ func main() {
 	}
 
 	resolvedTempestDir := *tempestDir
-	if absTempest, absErr := filepath.Abs(resolvedTempestDir); absErr == nil {
-		resolvedTempestDir = absTempest
-	}
-	if _, statErr := os.Stat(resolvedTempestDir); os.IsNotExist(statErr) && os.Getenv("TEMPEST_BIN_DIR") == "" {
-		exeSibling := filepath.Clean(filepath.Join(filepath.Dir(selfExe), "..", "..", "tempest", "bin"))
-		if _, sibErr := os.Stat(exeSibling); sibErr == nil {
-			resolvedTempestDir = exeSibling
+	if os.Getenv("TEMPEST_BIN_DIR") == "" && resolvedTempestDir == defaultDir {
+		exeDir := filepath.Dir(selfExe)
+		if _, exeErr := os.Stat(filepath.Join(exeDir, "souei")); exeErr == nil {
+			resolvedTempestDir = exeDir
+		} else if absTempest, absErr := filepath.Abs(resolvedTempestDir); absErr == nil {
+			resolvedTempestDir = absTempest
 		}
+		if _, statErr := os.Stat(resolvedTempestDir); os.IsNotExist(statErr) {
+			exeSibling := filepath.Clean(filepath.Join(exeDir, "..", "..", "tempest", "bin"))
+			if _, sibErr := os.Stat(exeSibling); sibErr == nil {
+				resolvedTempestDir = exeSibling
+			}
+		}
+	} else if absTempest, absErr := filepath.Abs(resolvedTempestDir); absErr == nil {
+		resolvedTempestDir = absTempest
 	}
 
 	srv := &Server{

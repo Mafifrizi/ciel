@@ -15,7 +15,7 @@ BIN = ROOT / "bin"
 ASSETS = ROOT / "assets"
 TEAMSERVER = str(BIN / "ciel-teamserver")
 CLIENT = str(BIN / "ciel-client")
-TEMPEST_BIN = Path(os.environ.get("TEMPEST_BIN_DIR", str(ROOT.parent / "tempest" / "bin")))
+TEMPEST_BIN = Path(os.environ.get("TEMPEST_BIN_DIR", str(BIN)))
 
 
 def load_ui_font(size=14):
@@ -124,10 +124,14 @@ def wait_for_server(host, port, proc, deadline=8.0):
 
 
 def main():
-    for name in ("souei", "chronoa", "ranga", "libranga.so"):
-        assert (TEMPEST_BIN / name).exists(), f"Missing Tempest binary: {TEMPEST_BIN / name}"
+    for name in ("souei", "chronoa", "ranga", "libranga.so", "tanuki"):
+        assert (TEMPEST_BIN / name).exists(), f"Missing bundled operative: {TEMPEST_BIN / name}"
     assert Path(TEAMSERVER).exists(), f"Missing {TEAMSERVER}"
     assert Path(CLIENT).exists(), f"Missing {CLIENT}"
+
+    tanuki_help = subprocess.run([str(BIN / "tanuki"), "--help"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+    assert tanuki_help.returncode == 0, f"bundled tanuki --help failed: {tanuki_help.stderr}"
+    print("[PASS] bundled tanuki CLI (--help)")
 
     port = pick_free_port()
     addr = f"127.0.0.1:{port}"
@@ -140,7 +144,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as work_dir:
         srv = subprocess.Popen(
-            [TEAMSERVER, "--addr", addr, "--tempest-dir", str(TEMPEST_BIN), "--work-dir", work_dir],
+            [TEAMSERVER, "--addr", addr, "--work-dir", work_dir],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -150,7 +154,8 @@ def main():
 
             r_ping = rpc_call("127.0.0.1", port, {"action": "ping"})
             assert r_ping["ok"] is True and r_ping["status"] == "READY", r_ping
-            print("[PASS] teamserver ping")
+            assert r_ping["data"]["binaries_present"]["tanuki"] is True, r_ping
+            print("[PASS] teamserver ping (bundled Tempest + Tanuki ready)")
 
             r_sync = rpc_call("127.0.0.1", port, {"action": "full_sync"})
             assert r_sync["ok"] is True and len(r_sync["rows"]) == 4, r_sync
