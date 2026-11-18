@@ -33,8 +33,10 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleOptionGraphicsItem>
 #include <QTabWidget>
@@ -43,6 +45,7 @@
 #include <QTcpSocket>
 #include <QTextCursor>
 #include <QTextEdit>
+#include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -675,6 +678,17 @@ public:
         appendHelpTableToConsole();
     }
 
+    ~CielWindow() override {
+        m_pollTimer.stop();
+        if (m_managedServer && m_managedServer->state() != QProcess::NotRunning) {
+            m_managedServer->terminate();
+            if (!m_managedServer->waitForFinished(1500)) {
+                m_managedServer->kill();
+                m_managedServer->waitForFinished(500);
+            }
+        }
+    }
+
     int runSelfTest(const QString &screenshotPath,
                     const QString &graphScreenshotPath,
                     const QString &altScreenshotPath = QString()) {
@@ -795,6 +809,20 @@ public:
     }
 
 public slots:
+    void startInteractiveSession() {
+        if (!ensureTeamserverRunning()) {
+            return;
+        }
+        runFullSync();
+        appendDetailedAuditTables();
+        if (m_actPoll) {
+            m_actPoll->setChecked(true);
+        }
+        if (m_operativeInput) {
+            m_operativeInput->setFocus();
+        }
+    }
+
     void runFullSync() {
         QJsonObject params;
         params["skew_sec"] = m_simSkewSec;
@@ -808,12 +836,12 @@ private:
 
         QMenu *mCiel = mb->addMenu("Ciel");
         QAction *actSync = mCiel->addAction("Sync Teamserver");
-        QAction *actPoll = mCiel->addAction("Toggle Auto-Poll (3s)");
-        actPoll->setCheckable(true);
+        m_actPoll = mCiel->addAction("Toggle Auto-Poll (3s)");
+        m_actPoll->setCheckable(true);
         mCiel->addSeparator();
         QAction *actExit = mCiel->addAction("Exit");
         connect(actSync, &QAction::triggered, this, &CielWindow::runFullSync);
-        connect(actPoll, &QAction::toggled, this, [this](bool on) {
+        connect(m_actPoll, &QAction::toggled, this, [this](bool on) {
             if (on) {
                 m_pollTimer.start(3000);
                 appendEventLog("*", "#8be9fd", "Auto-poll enabled (3000ms)");
@@ -1526,11 +1554,87 @@ private:
         m_graphView->centerOn(510.0, 184.0);
     }
 
+    bool ensureTeamserverRunning() {
+        QString host;
+        quint16 port = 0;
+        if (!parseHostPort(m_serverAddr, host, port)) {
+            appendEventLog("!", "#ff5555", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
+            return false;
+        }
+
+        {
+            QTcpSocket probe;
+            probe.connectToHost(host, port);
+            if (probe.waitForConnected(150)) {
+                return true;
+            }
+        }
+
+        if (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+            return false;
+        }
+
+        const QStringList candidates = {
+            QCoreApplication::applicationDirPath() + "/ciel-teamserver",
+            "bin/ciel-teamserver",
+            "../bin/ciel-teamserver",
+            QStandardPaths::findExecutable("ciel-teamserver")
+        };
+        QString binPath;
+        for (const QString &c : candidates) {
+            if (!c.isEmpty() && QFile::exists(c)) {
+                binPath = c;
+                break;
+            }
+        }
+        if (binPath.isEmpty()) {
+            appendEventLog("!", "#ff5555", "Unable to locate ciel-teamserver binary");
+            return false;
+        }
+
+        if (!m_managedServer) {
+            m_managedServer = new QProcess(this);
+            m_managedServer->setProcessChannelMode(QProcess::MergedChannels);
+        }
+        if (m_managedServer->state() == QProcess::NotRunning) {
+            m_managedServer->start(binPath, {"--addr", m_serverAddr});
+            if (!m_managedServer->waitForStarted(2000)) {
+                appendEventLog("!", "#ff5555", "Failed launching ciel-teamserver: " + htmlEsc(binPath));
+                return false;
+            }
+        }
+
+        for (int attempt = 0; attempt < 25; ++attempt) {
+            QTcpSocket check;
+            check.connectToHost(host, port);
+            if (check.waitForConnected(150)) {
+                if (!m_loggedManagedBoot) {
+                    m_loggedManagedBoot = true;
+                    appendEventLog("+", "#50fa7b",
+                        "Auto-started local ciel-teamserver on " + htmlEsc(m_serverAddr) +
+                        " (Tempest + Tanuki operatives ready)");
+                }
+                return true;
+            }
+            if (m_managedServer->state() == QProcess::NotRunning) {
+                appendEventLog("!", "#ff5555", "Managed ciel-teamserver exited before listening");
+                return false;
+            }
+            QThread::msleep(100);
+        }
+        appendEventLog("!", "#ff5555", "Timed out waiting for managed ciel-teamserver on " + htmlEsc(m_serverAddr));
+        return false;
+    }
+
     bool executeAction(const QString &action, const QJsonObject &extraParams, QJsonObject &respOut) {
         QString host;
         quint16 port = 0;
         if (!parseHostPort(m_serverAddr, host, port)) {
             appendEventLog("!", "#ff5555", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
+            return false;
+        }
+
+        if (!ensureTeamserverRunning()) {
             return false;
         }
 
@@ -1617,6 +1721,9 @@ private:
     QLineEdit *m_operativeInput = nullptr;
 
     QTimer m_pollTimer;
+    QProcess *m_managedServer = nullptr;
+    QAction *m_actPoll = nullptr;
+    bool m_loggedManagedBoot = false;
     QMap<QString, OperativeSnapshot> m_snapshots;
 };
 
@@ -1678,7 +1785,7 @@ int main(int argc, char **argv) {
             QApplication::exit(rc);
         });
     } else {
-        QTimer::singleShot(150, &win, &CielWindow::runFullSync);
+        QTimer::singleShot(100, &win, &CielWindow::startInteractiveSession);
     }
 
     return app.exec();

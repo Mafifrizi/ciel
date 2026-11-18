@@ -15,6 +15,7 @@ BIN = ROOT / "bin"
 ASSETS = ROOT / "assets"
 TEAMSERVER = str(BIN / "ciel-teamserver")
 CLIENT = str(BIN / "ciel-client")
+CIEL = str(BIN / "ciel")
 TEMPEST_BIN = Path(os.environ.get("TEMPEST_BIN_DIR", str(BIN)))
 
 
@@ -124,10 +125,11 @@ def wait_for_server(host, port, proc, deadline=8.0):
 
 
 def main():
-    for name in ("souei", "chronoa", "ranga", "libranga.so", "tanuki"):
-        assert (TEMPEST_BIN / name).exists(), f"Missing bundled operative: {TEMPEST_BIN / name}"
+    for name in ("souei", "chronoa", "ranga", "libranga.so", "tanuki", "ciel"):
+        assert (TEMPEST_BIN / name).exists() or (BIN / name).exists(), f"Missing bundled operative: {name}"
     assert Path(TEAMSERVER).exists(), f"Missing {TEAMSERVER}"
     assert Path(CLIENT).exists(), f"Missing {CLIENT}"
+    assert Path(CIEL).exists(), f"Missing {CIEL}"
 
     tanuki_help = subprocess.run([str(BIN / "tanuki"), "--help"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
     assert tanuki_help.returncode == 0, f"bundled tanuki --help failed: {tanuki_help.stderr}"
@@ -232,6 +234,27 @@ def main():
                 srv.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 srv.kill()
+
+    # Verify standalone zero-setup launch: ./bin/ciel auto-spawns ciel-teamserver, runs full checks, and stops it on exit
+    auto_port = pick_free_port()
+    auto_addr = f"127.0.0.1:{auto_port}"
+    auto_env = os.environ.copy()
+    auto_env["QT_QPA_PLATFORM"] = "offscreen"
+    auto_res = subprocess.run(
+        [CIEL, "--addr", auto_addr, "--self-test"],
+        env=auto_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    assert auto_res.returncode == 0, f"ciel auto-spawn --self-test failed ({auto_res.returncode}): {auto_res.stdout}\n{auto_res.stderr}"
+    try:
+        with socket.create_connection(("127.0.0.1", auto_port), timeout=0.4):
+            raise AssertionError("Auto-spawned ciel-teamserver did not terminate cleanly on exit")
+    except OSError:
+        pass
+    print("[PASS] standalone ./bin/ciel auto-spawn & clean shutdown")
 
     print("\nALL CIEL VERIFICATION CHECKS PASSED")
 

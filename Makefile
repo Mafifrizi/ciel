@@ -37,10 +37,11 @@ bin/ciel-client: client/CMakeLists.txt client/src/main.cpp | bin
 	cmake -B build/client -S client
 	cmake --build build/client -j$$(nproc)
 	cp build/client/ciel-client bin/ciel-client
+	cp -f bin/ciel-client bin/ciel
 
 install: all
 	mkdir -p "$(PREFIX)/bin"
-	cp -f bin/ciel-teamserver bin/ciel-client bin/souei bin/chronoa bin/ranga bin/libranga.so bin/tanuki "$(PREFIX)/bin/"
+	cp -f bin/ciel bin/ciel-teamserver bin/ciel-client bin/souei bin/chronoa bin/ranga bin/libranga.so bin/tanuki "$(PREFIX)/bin/"
 	@echo "[install] Installed Ciel, Tempest (souei, chronoa, ranga, libranga.so), and Tanuki into $(PREFIX)/bin"
 
 test: all
