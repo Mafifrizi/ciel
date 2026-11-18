@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <i>Ciel is a native desktop command and control console for the Tanuki and Tempest identity runtime ecosystem.</i>
+  <i>Ciel is a native desktop command and control console for the Tanuki, Tempest, and Shuna identity runtime ecosystem.</i>
 </p>
 
 <p align="center">
@@ -28,19 +28,18 @@
 
 ## About
 
-Ciel pairs a compiled C++20 Qt6 desktop client with a zero-dependency Go teamserver to orchestrate [Tempest](https://github.com/Mafifrizi/tempest) runtime operatives for the [Tanuki](https://github.com/Mafifrizi/tanuki) identity ecosystem. It inspects active Kerberos caches, kernel session keyrings, UNIX socket peers, and credential teardown without browser runtimes, web toolkits, or synthetic demo data.
+Ciel pairs a compiled C++20 Qt6 desktop client with a Go 1.24+ teamserver over post-quantum hybrid mTLS 1.3 (`X25519MLKEM768`) to orchestrate [Tempest](https://github.com/Mafifrizi/tempest) kernel operatives and [Tanuki](https://github.com/Mafifrizi/tanuki) identity diagnostics. Optional PostgreSQL 16 persistence (`sslmode=verify-full`) uses [Shuna](https://github.com/Mafifrizi/shuna) envelope encryption (`SHUNA1` / `SHUNAS1`) so sensitive hostnames, principals, paths, and audit logs never hit disk or WAL in plaintext.
 
 ## Features
 
-- Single-command install (`install.sh`) and single-command launch (`ciel` auto-starts an authenticated teamserver and orchestrates every Tempest and Tanuki module directly inside Ciel)
-- Native C++20 Qt6 desktop interface with zero browser wrappers
-- Left-to-right interactive identity topology graph with draggable operative nodes, live status pills, and zoom controls
-- Ten-column session matrix with diff-only Event Viewer, Raw JSON inspector, and Field Target Paths overrides
-- Zero external Go dependencies in the local TCP JSON teamserver with per-session 256-bit `auth_token` enforcement
-- Live verification for RFC 4120 clock skew, weak ciphers, `kinit -R` ticket renewal, and possessor-only `0x3f000000` keyring isolation
+- Single-command install (`install.sh`) and single-command launch (`ciel` auto-provisions workspace PKI, starts an mTLS-authenticated teamserver, and orchestrates every Tempest and Tanuki module)
+- Post-quantum hybrid mTLS 1.3 (`X25519MLKEM768`) between `ciel-client` (`QSslSocket` + OpenSSL 3.5+) and `ciel-teamserver` with live CRL/DB certificate revocation and mTLS-cert-bound 256-bit `auth_token` sessions
+- Encrypted PostgreSQL 16 fleet persistence (`pgx/v5`, mandatory `sslmode=verify-full`) with row-bound `SHUNA1` AEAD, pseudonymous HMAC `host_id` blind-indexing, persistent `vault_lockout` brute-force protection, batched online `vault_rotate`, and `SHUNAS1` streaming `pg_dump` backups
+- Clean Ephemeral Standalone Mode (`db_connected: false`) when no PostgreSQL DSN is configured, or fail-closed exit (`exit 3`) when a configured DB is unreachable
+- Native C++20 Qt6 desktop interface with interactive `Session Graph`, 10-column `Sessions` matrix, diff-only `Event Viewer`, `Raw JSON` inspector, and `Operative Console`
 
 ## Documentation
 
-- [Architecture and Ecosystem Integration](docs/ARCHITECTURE.md)
-- [Building, Operator Workflow, and UI Snapshots](docs/USAGE.md)
+- [Architecture, Cryptography, and PostgreSQL Schema](docs/ARCHITECTURE.md)
+- [Building, PostgreSQL TLS Provisioning, and Operator Workflow](docs/USAGE.md)
 - [Operative Console Commands](docs/COMMANDS.md)

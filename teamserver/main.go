@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,6 +25,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Mafifrizi/shuna/pkg/contract"
+	"github.com/Mafifrizi/shuna/pkg/kdf"
+	"github.com/Mafifrizi/shuna/pkg/mtls"
+	"github.com/Mafifrizi/shuna/pkg/vault"
 )
 
 const defaultTempestDir = "../tempest/bin"
@@ -75,6 +82,15 @@ type Request struct {
 	Subcommand     string   `json:"subcommand,omitempty"`
 	TargetArg      string   `json:"target_arg,omitempty"`
 	Args           []string `json:"args,omitempty"`
+	HostID         string   `json:"host_id,omitempty"`
+	OperativeID    string   `json:"operative_id,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+	Passphrase     string   `json:"passphrase,omitempty"`
+	NewPassphrase  string   `json:"new_passphrase,omitempty"`
+	SerialHex      string   `json:"serial_hex,omitempty"`
+	Reason         string   `json:"reason,omitempty"`
+	OutPath        string   `json:"out_path,omitempty"`
+	CertFP         string   `json:"cert_fp,omitempty"`
 }
 
 type Row struct {
@@ -102,16 +118,52 @@ type Response struct {
 	Logs      []string       `json:"logs,omitempty"`
 }
 
+const (
+	defaultTokenTTL   = 12 * time.Hour
+	tokenRotateGrace  = 30 * time.Second
+)
+
+type authSession struct {
+	TokenHash  [32]byte
+	CertFP     string
+	CertSerial string
+	IssuedAt   time.Time
+	ExpiresAt  time.Time
+}
+
+type peerConnInfo struct {
+	CertFP     string
+	SerialHex  string
+	CommonName string
+	PQCGroup   string
+}
+
 type Server struct {
-	tempestDir  string
-	tanukiBin   string
-	workDir     string
-	selfExe     string
-	kcmSockPath string
-	authToken   string
-	tokenFile   string
-	connSem     chan struct{}
-	mu          sync.Mutex
+	tempestDir             string
+	tanukiBin              string
+	workDir                string
+	selfExe                string
+	kcmSockPath            string
+	authToken              string
+	tokenFile              string
+	pkiDir                 string
+	storage                *Storage
+	crlMgr                 *mtls.CRLManager
+	bootstrapCertFP        string
+	bootstrapSerial        string
+	requireTLSBinding      bool
+	allowClassicalFallback bool
+	connSem                chan struct{}
+	mu                     sync.Mutex
+
+	sessMu   sync.Mutex
+	sessions []*authSession
+
+	revokedMu      sync.RWMutex
+	revokedSerials map[string]bool
+
+	connsMu     sync.Mutex
+	activeConns map[net.Conn]peerConnInfo
 }
 
 func validateCleanArg(s string, allowLeadingDash bool) error {
@@ -1463,27 +1515,225 @@ func hostUserInfo() (string, int, string) {
 	return username, os.Getuid(), host
 }
 
-func (s *Server) isAuthorized(token string) bool {
-	if s.authToken == "" {
+func (s *Server) registerSession(token, certFP, certSerial string, ttl time.Duration) authSession {
+	sum := sha256.Sum256([]byte(token))
+	now := time.Now().UTC()
+	sess := &authSession{
+		TokenHash:  sum,
+		CertFP:     strings.ToLower(strings.TrimSpace(certFP)),
+		CertSerial: strings.ToLower(strings.TrimSpace(certSerial)),
+		IssuedAt:   now,
+		ExpiresAt:  now.Add(ttl),
+	}
+	s.sessMu.Lock()
+	s.pruneExpiredSessionsLocked(now)
+	s.sessions = append(s.sessions, sess)
+	s.sessMu.Unlock()
+	return *sess
+}
+
+func (s *Server) pruneExpiredSessionsLocked(now time.Time) {
+	kept := s.sessions[:0]
+	for _, sess := range s.sessions {
+		if sess == nil || !now.Before(sess.ExpiresAt) {
+			if sess != nil {
+				kdf.WipeBytes(sess.TokenHash[:])
+			}
+			continue
+		}
+		kept = append(kept, sess)
+	}
+	s.sessions = kept
+}
+
+func (s *Server) isSerialRevoked(serialHex string) bool {
+	canon := strings.ToLower(strings.TrimSpace(serialHex))
+	if canon == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
+	s.revokedMu.RLock()
+	rev := s.revokedSerials[canon]
+	s.revokedMu.RUnlock()
+	if rev {
+		return true
+	}
+	if s.crlMgr != nil {
+		_ = s.crlMgr.ReloadIfChanged()
+		if s.crlMgr.IsRevokedHex(canon) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) authorizeRequest(token, peerFP, peerSerial string) (*authSession, bool) {
+	if token == "" {
+		return nil, false
+	}
+	if peerSerial != "" && s.isSerialRevoked(peerSerial) {
+		return nil, false
+	}
+	tokHash := sha256.Sum256([]byte(token))
+	defer kdf.WipeBytes(tokHash[:])
+
+	now := time.Now().UTC()
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	s.pruneExpiredSessionsLocked(now)
+
+	var matched *authSession
+	for _, sess := range s.sessions {
+		if subtle.ConstantTimeCompare(tokHash[:], sess.TokenHash[:]) != 1 {
+			continue
+		}
+		if s.requireTLSBinding || peerFP != "" {
+			if sess.CertFP == "" || peerFP == "" {
+				continue
+			}
+			if subtle.ConstantTimeCompare([]byte(strings.ToLower(peerFP)), []byte(sess.CertFP)) != 1 {
+				continue
+			}
+		}
+		cp := *sess
+		matched = &cp
+		break
+	}
+	if matched != nil {
+		return matched, true
+	}
+
+	// Unit-test compatibility when Server{} is constructed directly without TLS/sessions.
+	if !s.requireTLSBinding && peerFP == "" && s.authToken != "" && len(s.sessions) == 0 {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1 {
+			return &authSession{IssuedAt: now, ExpiresAt: now.Add(defaultTokenTTL)}, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) isAuthorized(token string) bool {
+	_, ok := s.authorizeRequest(token, "", "")
+	return ok
+}
+
+func (s *Server) storageStatusFields() map[string]any {
+	dbConn := false
+	sslMode := "standalone"
+	var keyVer uint32
+	vaultLocked := false
+	vaultWiped := false
+	rotating := false
+	hostID := ""
+	if s.storage != nil {
+		dbConn = s.storage.DBConnected()
+		sslMode = s.storage.SSLMode()
+		keyVer = s.storage.ActiveKeyVersion()
+		vaultLocked = s.storage.VaultLocked()
+		vaultWiped = s.storage.VaultLockoutStatus().WipedLocked
+		rotating = s.storage.IsRotating()
+		hostID = s.storage.LocalHostID()
+	}
+	return map[string]any{
+		"db_connected":         dbConn,
+		"ssl_mode":             sslMode,
+		"shuna_key_version":    keyVer,
+		"vault_locked":         vaultLocked,
+		"vault_wiped":          vaultWiped,
+		"rotation_in_progress": rotating,
+		"host_id":              hostID,
+	}
+}
+
+func mergeMap(dst, src map[string]any) {
+	for k, v := range src {
+		dst[k] = v
+	}
+}
+
+func mapStorageErr(resp *Response, err error, fallbackStatus string) {
+	resp.OK = false
+	if errors.Is(err, vault.ErrVaultLocked) {
+		resp.ExitCode = contract.ExitPolicyStop
+		resp.Status = "VAULT_LOCKED"
+		resp.Error = err.Error()
+		return
+	}
+	if errors.Is(err, ErrDBNotConnected) || errors.Is(err, vault.ErrVaultNotFound) {
+		resp.ExitCode = contract.ExitMissing
+		resp.Status = "MISSING"
+		resp.Error = err.Error()
+		return
+	}
+	if code := contract.CodeOf(err); code != contract.ExitUsage || errors.Is(err, contract.NewError(code, "", "", nil)) {
+		resp.ExitCode = code
+	} else {
+		resp.ExitCode = contract.ExitPolicyStop
+	}
+	if s := contract.StatusOf(err); s != "" && s != "USAGE" {
+		resp.Status = s
+	} else if fallbackStatus != "" {
+		resp.Status = fallbackStatus
+	} else {
+		resp.Status = "ERROR"
+	}
+	resp.Error = err.Error()
+}
+
+func (s *Server) closeConnsForSerial(serialHex string, exclude net.Conn) int {
+	canon := strings.ToLower(strings.TrimSpace(serialHex))
+	var toClose []net.Conn
+	s.connsMu.Lock()
+	for c, info := range s.activeConns {
+		if strings.ToLower(info.SerialHex) == canon && c != exclude {
+			toClose = append(toClose, c)
+		}
+	}
+	s.connsMu.Unlock()
+	for _, c := range toClose {
+		_ = c.Close()
+	}
+	return len(toClose)
+}
+
+func (s *Server) revokeSessionsForSerial(serialHex string) int {
+	canon := strings.ToLower(strings.TrimSpace(serialHex))
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	removed := 0
+	kept := s.sessions[:0]
+	for _, sess := range s.sessions {
+		if sess != nil && strings.ToLower(sess.CertSerial) == canon {
+			kdf.WipeBytes(sess.TokenHash[:])
+			removed++
+			continue
+		}
+		kept = append(kept, sess)
+	}
+	s.sessions = kept
+	return removed
 }
 
 func (s *Server) handleRequest(req Request) Response {
+	resp, _ := s.handleRequestWithPeer(req, peerConnInfo{}, nil)
+	return resp
+}
+
+func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentConn net.Conn) (Response, bool) {
 	ts := time.Now().Format("15:04:05")
 	resp := Response{
 		Action:    req.Action,
 		Timestamp: ts,
 	}
+	closeAfterWrite := false
 
-	if !s.isAuthorized(req.AuthToken) {
+	sess, ok := s.authorizeRequest(req.AuthToken, peer.CertFP, peer.SerialHex)
+	if !ok {
 		resp.OK = false
 		resp.ExitCode = 1
 		resp.Status = "UNAUTHORIZED"
-		resp.Error = "Invalid or missing auth_token"
+		resp.Error = "Invalid, expired, or cert-mismatched auth_token"
 		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] unauthorized request action=%s", ts, req.Action)}
-		return resp
+		return resp, false
 	}
 
 	resolvedCC, ccScheme, _ := resolveCCachePath(req.CcachePath)
@@ -1491,6 +1741,11 @@ func (s *Server) handleRequest(req Request) Response {
 	resolvedKT := resolveKeytabPath(req.KeytabPath)
 	resolvedKrb5 := resolveKrb5ConfPath(req.Krb5ConfPath)
 	_, kinitErr := exec.LookPath("kinit")
+
+	pqcGroup := peer.PQCGroup
+	if pqcGroup == "" {
+		pqcGroup = "X25519MLKEM768"
+	}
 
 	switch req.Action {
 	case "ping":
@@ -1515,11 +1770,12 @@ func (s *Server) handleRequest(req Request) Response {
 			resp.ExitCode = 3
 		}
 		uname, uid, hostname := hostUserInfo()
-		resp.Data = map[string]any{
+		data := map[string]any{
 			"server":              "ciel-teamserver",
 			"tempest_dir":         s.tempestDir,
 			"tanuki_bin":          s.tanukiBin,
 			"work_dir":            s.workDir,
+			"pki_dir":             s.pkiDir,
 			"resolved_ccache":     resolvedCC,
 			"ccache_scheme":       ccScheme,
 			"resolved_kcm_socket": resolvedKCM,
@@ -1527,6 +1783,11 @@ func (s *Server) handleRequest(req Request) Response {
 			"resolved_krb5_conf":  resolvedKrb5,
 			"kinit_available":     kinitErr == nil,
 			"auth_enforced":       true,
+			"mtls_enforced":       true,
+			"pqc_group":           pqcGroup,
+			"token_expires_at":    sess.ExpiresAt.UTC().Format(time.RFC3339),
+			"client_cert_serial":  peer.SerialHex,
+			"client_cert_fp":      peer.CertFP,
 			"binaries_present":    present,
 			"pid":                 os.Getpid(),
 			"user":                uname,
@@ -1534,7 +1795,10 @@ func (s *Server) handleRequest(req Request) Response {
 			"hostname":            hostname,
 			"arch":                runtime.GOARCH,
 		}
-		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] ping status=%s tempest_dir=%s tanuki=%s", ts, resp.Status, s.tempestDir, s.tanukiBin)}
+		mergeMap(data, s.storageStatusFields())
+		resp.Data = data
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] ping status=%s pqc=%s db=%v vault_locked=%v",
+			ts, resp.Status, pqcGroup, data["db_connected"], data["vault_locked"])}
 
 	case "souei_probe":
 		row, data, rc, logLine := s.execSoueiProbe(req, req.WatchInotify)
@@ -1544,6 +1808,13 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-01", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "souei_probe",
+				Summary: row.Detail,
+				Body:    logLine,
+			})
+		}
 
 	case "souei_watch":
 		row, data, rc, logLine := s.execSoueiProbe(req, true)
@@ -1553,6 +1824,13 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-01", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "souei_watch",
+				Summary: row.Detail,
+				Body:    logLine,
+			})
+		}
 
 	case "chronoa_check":
 		row, data, rc, logLine := s.execChronoaCheck(req)
@@ -1562,6 +1840,13 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-02", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "chronoa_check",
+				Summary: row.Detail,
+				Body:    logLine,
+			})
+		}
 
 	case "ranga_status":
 		row, data, rc, logLine := s.execRangaStatus(false, "")
@@ -1580,6 +1865,13 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-04", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "ranga_isolate",
+				Summary: row.Detail,
+				Body:    logLine,
+			})
+		}
 
 	case "ranga_purge":
 		row, data, rc, logLine := s.execRangaPurge(req)
@@ -1589,6 +1881,18 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-05", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "ranga_purge",
+				Summary: row.Target,
+				Body:    logLine,
+			})
+			_ = s.storage.RecordOperatorCommand(context.Background(), req.HostID, OperatorCommandPayload{
+				OperatorName: peer.CommonName,
+				Action:       "ranga_purge",
+				Command:      req.PurgePath,
+			}, rc, row.Status)
+		}
 
 	case "tanuki_exec":
 		row, data, rc, logLine := s.execTanuki(req)
@@ -1598,6 +1902,19 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Data = data
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
+		if s.storage != nil {
+			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-06", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
+				Action:  "tanuki_exec:" + req.Subcommand,
+				Summary: row.Detail,
+				Body:    logLine,
+			})
+			_ = s.storage.RecordOperatorCommand(context.Background(), req.HostID, OperatorCommandPayload{
+				OperatorName: peer.CommonName,
+				Action:       "tanuki_exec",
+				Command:      req.Subcommand + " " + req.TargetArg,
+				Args:         req.Args,
+			}, rc, row.Status)
+		}
 
 	case "full_sync":
 		r1, d1, rc1, l1 := s.execSoueiProbe(req, false)
@@ -1619,13 +1936,15 @@ func (s *Server) handleRequest(req Request) Response {
 		}
 		uname, uid, hostname := hostUserInfo()
 		resp.Rows = []Row{r1, r2, r3, r4, r5}
-		resp.Data = map[string]any{
+		logs := []string{ts + " " + l1, ts + " " + l2, ts + " " + l3, ts + " " + l4, ts + " " + l5}
+		data := map[string]any{
 			"souei":               d1,
 			"chronoa":             d2,
 			"ranga_baseline":      d3,
 			"ranga_isolated":      d4,
 			"tanuki_doctor":       d5,
 			"work_dir":            s.workDir,
+			"pki_dir":             s.pkiDir,
 			"resolved_ccache":     resolvedCC,
 			"ccache_scheme":       ccScheme,
 			"resolved_kcm_socket": resolvedKCM,
@@ -1633,12 +1952,386 @@ func (s *Server) handleRequest(req Request) Response {
 			"resolved_krb5_conf":  resolvedKrb5,
 			"kinit_available":     kinitErr == nil,
 			"auth_enforced":       true,
+			"mtls_enforced":       true,
+			"pqc_group":           pqcGroup,
+			"token_expires_at":    sess.ExpiresAt.UTC().Format(time.RFC3339),
+			"client_cert_serial":  peer.SerialHex,
 			"user":                uname,
 			"uid":                 uid,
 			"hostname":            hostname,
 			"arch":                runtime.GOARCH,
 		}
-		resp.Logs = []string{ts + " " + l1, ts + " " + l2, ts + " " + l3, ts + " " + l4, ts + " " + l5}
+		if s.storage != nil && s.storage.DBConnected() && !s.storage.VaultLocked() {
+			hostID, hidErr := s.storage.ComputeHostID(req.HostID)
+			if hidErr == nil {
+				meta := currentHostMeta()
+				if syncErr := s.storage.RecordFullSync(context.Background(), hostID, meta, resp.Status, resp.Rows, logs); syncErr != nil {
+					data["db_sync_error"] = syncErr.Error()
+				}
+			}
+		}
+		mergeMap(data, s.storageStatusFields())
+		resp.Data = data
+		resp.Logs = logs
+
+	case "host_list":
+		if s.storage == nil {
+			mapStorageErr(&resp, ErrDBNotConnected, "MISSING")
+			resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] host_list failed: %s", ts, resp.Error)}
+			break
+		}
+		hosts, err := s.storage.ListHosts(context.Background())
+		if err != nil {
+			mapStorageErr(&resp, err, "ERROR")
+			resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] host_list status=%s err=%s", ts, resp.Status, resp.Error)}
+			break
+		}
+		resp.OK = true
+		resp.Status = "OK"
+		resp.Data = map[string]any{
+			"hosts": hosts,
+			"count": len(hosts),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] host_list count=%d", ts, len(hosts))}
+
+	case "history_list":
+		if s.storage == nil {
+			mapStorageErr(&resp, ErrDBNotConnected, "MISSING")
+			resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] history_list failed: %s", ts, resp.Error)}
+			break
+		}
+		hostID := strings.TrimSpace(req.HostID)
+		if hostID != "" {
+			computed, hidErr := s.storage.ComputeHostID(hostID)
+			if hidErr != nil {
+				mapStorageErr(&resp, hidErr, "VAULT_LOCKED")
+				break
+			}
+			hostID = computed
+		}
+		events, snaps, err := s.storage.ListHistory(context.Background(), hostID, strings.TrimSpace(req.OperativeID), req.Limit)
+		if err != nil {
+			mapStorageErr(&resp, err, "ERROR")
+			resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] history_list status=%s err=%s", ts, resp.Status, resp.Error)}
+			break
+		}
+		resp.OK = true
+		resp.Status = "OK"
+		resp.Data = map[string]any{
+			"events":         events,
+			"snapshots":      snaps,
+			"event_count":    len(events),
+			"snapshot_count": len(snaps),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] history_list events=%d snapshots=%d", ts, len(events), len(snaps))}
+
+	case "profile_save":
+		if s.storage == nil {
+			mapStorageErr(&resp, ErrDBNotConnected, "MISSING")
+			break
+		}
+		for _, p := range []string{req.CcachePath, req.KeytabPath, req.Krb5ConfPath, req.KcmSocket} {
+			if strings.TrimSpace(p) != "" {
+				if err := validatePathInput(strings.TrimSpace(p)); err != nil {
+					resp.OK = false
+					resp.ExitCode = 1
+					resp.Status = "USAGE_ERROR"
+					resp.Error = err.Error()
+					resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] profile_save rejected: %v", ts, err)}
+					return resp, false
+				}
+			}
+		}
+		hostID, err := s.storage.ComputeHostID(req.HostID)
+		if err != nil {
+			mapStorageErr(&resp, err, "VAULT_LOCKED")
+			break
+		}
+		prof := TargetProfile{
+			HostID:       hostID,
+			CcachePath:   strings.TrimSpace(req.CcachePath),
+			KeytabPath:   strings.TrimSpace(req.KeytabPath),
+			Krb5ConfPath: strings.TrimSpace(req.Krb5ConfPath),
+			KcmSocket:    strings.TrimSpace(req.KcmSocket),
+		}
+		if err := s.storage.SaveProfile(context.Background(), hostID, currentHostMeta(), prof); err != nil {
+			mapStorageErr(&resp, err, "ERROR")
+			break
+		}
+		resp.OK = true
+		resp.Status = "SAVED"
+		resp.Data = map[string]any{
+			"host_id":        hostID,
+			"ccache_path":    prof.CcachePath,
+			"keytab_path":    prof.KeytabPath,
+			"krb5_conf_path": prof.Krb5ConfPath,
+			"kcm_socket":     prof.KcmSocket,
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] profile_save host_id=%s", ts, hostID)}
+
+	case "profile_get":
+		if s.storage == nil {
+			mapStorageErr(&resp, ErrDBNotConnected, "MISSING")
+			break
+		}
+		hostID, err := s.storage.ComputeHostID(req.HostID)
+		if err != nil {
+			mapStorageErr(&resp, err, "VAULT_LOCKED")
+			break
+		}
+		prof, found, err := s.storage.GetProfile(context.Background(), hostID)
+		if err != nil {
+			mapStorageErr(&resp, err, "ERROR")
+			break
+		}
+		resp.OK = true
+		resp.Status = "OK"
+		if !found {
+			resp.Status = "NOT_FOUND"
+		}
+		resp.Data = map[string]any{
+			"found":          found,
+			"host_id":        prof.HostID,
+			"ccache_path":    prof.CcachePath,
+			"keytab_path":    prof.KeytabPath,
+			"krb5_conf_path": prof.Krb5ConfPath,
+			"kcm_socket":     prof.KcmSocket,
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] profile_get host_id=%s found=%v", ts, hostID, found)}
+
+	case "vault_unlock":
+		if s.storage == nil {
+			mapStorageErr(&resp, vault.ErrVaultNotFound, "MISSING")
+			break
+		}
+		pass := []byte(req.Passphrase)
+		defer kdf.WipeBytes(pass)
+		err := s.storage.UnlockVault(context.Background(), pass)
+		if err != nil {
+			mapStorageErr(&resp, err, "POLICY_STOP")
+			ls := s.storage.VaultLockoutStatus()
+			retrySec := 0
+			if !ls.LockedUntil.IsZero() {
+				rem := int(time.Until(ls.LockedUntil).Seconds())
+				if rem > 0 {
+					retrySec = rem
+				}
+			}
+			resp.Data = map[string]any{
+				"vault_locked":    s.storage.VaultLocked(),
+				"failed_attempts": ls.FailedAttempts,
+				"retry_after_sec": retrySec,
+				"wiped_locked":    ls.WipedLocked,
+			}
+			resp.Logs = []string{fmt.Sprintf("%s [SHUNA] vault_unlock status=%s attempts=%d retry_after=%ds",
+				ts, resp.Status, ls.FailedAttempts, retrySec)}
+			break
+		}
+		resp.OK = true
+		resp.Status = "UNLOCKED"
+		resp.Data = s.storageStatusFields()
+		resp.Logs = []string{fmt.Sprintf("%s [SHUNA] vault_unlock status=UNLOCKED key_version=%d", ts, s.storage.ActiveKeyVersion())}
+
+	case "vault_rotate":
+		if s.storage == nil {
+			mapStorageErr(&resp, vault.ErrVaultNotFound, "MISSING")
+			break
+		}
+		var pass []byte
+		if req.NewPassphrase != "" {
+			pass = []byte(req.NewPassphrase)
+		} else if req.Passphrase != "" {
+			pass = []byte(req.Passphrase)
+		}
+		defer kdf.WipeBytes(pass)
+		oldVer, newVer, err := s.storage.StartRotation(context.Background(), pass)
+		if err != nil {
+			mapStorageErr(&resp, err, "POLICY_STOP")
+			resp.Logs = []string{fmt.Sprintf("%s [SHUNA] vault_rotate failed status=%s err=%s", ts, resp.Status, resp.Error)}
+			break
+		}
+		_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-06", "INFO", 0, "ROTATING", AuditDetail{
+			Action:  "vault_rotate",
+			Summary: fmt.Sprintf("key rotation %d -> %d", oldVer, newVer),
+			Body:    fmt.Sprintf("dual-key online rotation started %d -> %d", oldVer, newVer),
+		})
+		resp.OK = true
+		resp.Status = "ROTATING"
+		resp.Data = map[string]any{
+			"previous_key_version": oldVer,
+			"shuna_key_version":    newVer,
+			"rotation_in_progress": s.storage.IsRotating(),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [SHUNA] vault_rotate %d -> %d (in_progress=%v)", ts, oldVer, newVer, s.storage.IsRotating())}
+
+	case "session_issue":
+		targetFP := strings.ToLower(strings.TrimSpace(req.CertFP))
+		if targetFP == "" {
+			targetFP = peer.CertFP
+		}
+		if len(targetFP) != 64 || !isLowerHex(targetFP) {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "USAGE_ERROR"
+			resp.Error = "cert_fp must be 64-char lowercase SHA-256 hex fingerprint"
+			break
+		}
+		newTok, err := generateRandomToken()
+		if err != nil {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "ERROR"
+			resp.Error = err.Error()
+			break
+		}
+		serial := strings.ToLower(strings.TrimSpace(req.SerialHex))
+		if serial == "" && targetFP == peer.CertFP {
+			serial = peer.SerialHex
+		}
+		newSess := s.registerSession(newTok, targetFP, serial, defaultTokenTTL)
+		resp.OK = true
+		resp.Status = "ISSUED"
+		resp.Data = map[string]any{
+			"auth_token":       newTok,
+			"cert_fp":          targetFP,
+			"issued_at":        newSess.IssuedAt.Format(time.RFC3339),
+			"token_expires_at": newSess.ExpiresAt.Format(time.RFC3339),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] session_issue cert_fp=%s", ts, targetFP[:12])}
+
+	case "token_rotate":
+		newTok, err := generateRandomToken()
+		if err != nil {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "ERROR"
+			resp.Error = err.Error()
+			break
+		}
+		newSess := s.registerSession(newTok, peer.CertFP, peer.SerialHex, defaultTokenTTL)
+		// Shrink previous matching token(s) for this certFP to 30s grace overlap.
+		graceDeadline := time.Now().UTC().Add(tokenRotateGrace)
+		newHash := newSess.TokenHash
+		s.sessMu.Lock()
+		for _, existing := range s.sessions {
+			if existing != nil && existing.TokenHash != newHash && existing.CertFP == newSess.CertFP {
+				if existing.ExpiresAt.After(graceDeadline) {
+					existing.ExpiresAt = graceDeadline
+				}
+			}
+		}
+		s.sessMu.Unlock()
+		if s.tokenFile != "" && (peer.CertFP == "" || peer.CertFP == s.bootstrapCertFP) {
+			_ = writeFileNoFollow(s.tokenFile, []byte(newTok+"\n"), 0o600)
+			s.authToken = newTok
+		}
+		resp.OK = true
+		resp.Status = "ROTATED"
+		resp.Data = map[string]any{
+			"auth_token":       newTok,
+			"issued_at":        newSess.IssuedAt.Format(time.RFC3339),
+			"token_expires_at": newSess.ExpiresAt.Format(time.RFC3339),
+			"grace_sec":        int(tokenRotateGrace.Seconds()),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] token_rotate grace=%ds", ts, int(tokenRotateGrace.Seconds()))}
+
+	case "cert_revoke":
+		if strings.TrimSpace(req.SerialHex) == "" {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "USAGE_ERROR"
+			resp.Error = "serial_hex is required"
+			break
+		}
+		_, canon, err := mtls.ParseSerial(req.SerialHex)
+		if err != nil {
+			mapStorageErr(&resp, err, "USAGE_ERROR")
+			break
+		}
+		reasonStr := strings.TrimSpace(req.Reason)
+		if reasonStr == "" {
+			reasonStr = "key_compromise"
+		}
+		reasonCode, err := mtls.ParseReason(reasonStr)
+		if err != nil {
+			mapStorageErr(&resp, err, "USAGE_ERROR")
+			break
+		}
+		if s.storage != nil && s.storage.DBConnected() {
+			if s.storage.VaultLocked() {
+				mapStorageErr(&resp, vault.ErrVaultLocked, "VAULT_LOCKED")
+				break
+			}
+			cn := peer.CommonName
+			if canon != peer.SerialHex || cn == "" {
+				cn = "revoked-peer"
+			}
+			if err := s.storage.RecordRevokedCert(context.Background(), canon, cn, reasonStr); err != nil {
+				mapStorageErr(&resp, err, "ERROR")
+				break
+			}
+		}
+		if s.crlMgr != nil {
+			if _, err := s.crlMgr.Revoke(canon, reasonCode); err != nil {
+				resp.OK = false
+				resp.ExitCode = 2
+				resp.Status = "POLICY_STOP"
+				resp.Error = err.Error()
+				break
+			}
+		}
+		s.revokedMu.Lock()
+		if s.revokedSerials == nil {
+			s.revokedSerials = make(map[string]bool)
+		}
+		s.revokedSerials[canon] = true
+		s.revokedMu.Unlock()
+
+		invalidated := s.revokeSessionsForSerial(canon)
+		closedOthers := s.closeConnsForSerial(canon, currentConn)
+		if strings.EqualFold(canon, peer.SerialHex) && currentConn != nil {
+			closeAfterWrite = true
+			closedOthers++
+		}
+		resp.OK = true
+		resp.Status = "REVOKED"
+		resp.Data = map[string]any{
+			"serial_hex":           canon,
+			"reason":               reasonStr,
+			"sessions_invalidated": invalidated,
+			"connections_closed":   closedOthers,
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [SHUNA:PKI] cert_revoke serial=%s closed_conns=%d", ts, canon, closedOthers)}
+
+	case "backup_export":
+		if s.storage == nil {
+			mapStorageErr(&resp, ErrDBNotConnected, "MISSING")
+			break
+		}
+		outPath := strings.TrimSpace(req.OutPath)
+		if outPath == "" {
+			outPath = filepath.Join(s.workDir, fmt.Sprintf("ciel-backup-%s.shunas1", time.Now().UTC().Format("20060102-150405")))
+		}
+		nBytes, err := s.storage.ExportBackup(context.Background(), outPath)
+		if err != nil {
+			mapStorageErr(&resp, err, "ERROR")
+			resp.Logs = []string{fmt.Sprintf("%s [SHUNA] backup_export failed: %s", ts, resp.Error)}
+			break
+		}
+		_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-06", "OK", 0, "BACKUP_EXPORTED", AuditDetail{
+			Action:  "backup_export",
+			Summary: fmt.Sprintf("SHUNAS1 backup (%d bytes)", nBytes),
+			Body:    outPath,
+		})
+		resp.OK = true
+		resp.Status = "EXPORTED"
+		resp.Data = map[string]any{
+			"out_path":          outPath,
+			"bytes_written":     nBytes,
+			"format":            "SHUNAS1",
+			"shuna_key_version": s.storage.ActiveKeyVersion(),
+		}
+		resp.Logs = []string{fmt.Sprintf("%s [SHUNA] backup_export path=%s bytes=%d", ts, outPath, nBytes)}
 
 	default:
 		resp.OK = false
@@ -1647,7 +2340,7 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Error = "Unknown action: " + req.Action
 		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] unknown action=%s", ts, req.Action)}
 	}
-	return resp
+	return resp, closeAfterWrite
 }
 
 func (s *Server) serveConn(conn net.Conn) {
@@ -1655,6 +2348,46 @@ func (s *Server) serveConn(conn net.Conn) {
 	if s.connSem != nil {
 		defer func() { <-s.connSem }()
 	}
+
+	var peer peerConnInfo
+	if tc, ok := conn.(*tls.Conn); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := tc.HandshakeContext(ctx)
+		cancel()
+		if err != nil {
+			return
+		}
+		st := tc.ConnectionState()
+		if st.Version != tls.VersionTLS13 || len(st.PeerCertificates) == 0 {
+			return
+		}
+		leaf := st.PeerCertificates[0]
+		pqcGroup := "X25519MLKEM768"
+		if s.allowClassicalFallback {
+			pqcGroup = "X25519MLKEM768:X25519"
+		}
+		peer = peerConnInfo{
+			CertFP:     mtls.CertFingerprintSHA256(leaf),
+			SerialHex:  mtls.FormatSerial(leaf.SerialNumber),
+			CommonName: leaf.Subject.CommonName,
+			PQCGroup:   pqcGroup,
+		}
+		if s.isSerialRevoked(peer.SerialHex) {
+			return
+		}
+		s.connsMu.Lock()
+		if s.activeConns == nil {
+			s.activeConns = make(map[net.Conn]peerConnInfo)
+		}
+		s.activeConns[conn] = peer
+		s.connsMu.Unlock()
+		defer func() {
+			s.connsMu.Lock()
+			delete(s.activeConns, conn)
+			s.connsMu.Unlock()
+		}()
+	}
+
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for {
@@ -1668,6 +2401,7 @@ func (s *Server) serveConn(conn net.Conn) {
 		}
 		var req Request
 		var resp Response
+		var closeAfter bool
 		if err := json.Unmarshal(line, &req); err != nil {
 			resp = Response{
 				OK:        false,
@@ -1677,7 +2411,7 @@ func (s *Server) serveConn(conn net.Conn) {
 				Error:     err.Error(),
 			}
 		} else {
-			resp = s.handleRequest(req)
+			resp, closeAfter = s.handleRequestWithPeer(req, peer, conn)
 		}
 		encoded, err := json.Marshal(resp)
 		if err != nil {
@@ -1686,6 +2420,9 @@ func (s *Server) serveConn(conn net.Conn) {
 		encoded = append(encoded, '\n')
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if _, wErr := conn.Write(encoded); wErr != nil {
+			break
+		}
+		if closeAfter {
 			break
 		}
 	}
@@ -1736,6 +2473,76 @@ func generateRandomToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+func (s *Server) initPKI(pkiDir string) error {
+	if err := validateSecureDir(pkiDir); err != nil {
+		return err
+	}
+	s.pkiDir = pkiDir
+	if s.revokedSerials == nil {
+		s.revokedSerials = make(map[string]bool)
+	}
+
+	caPath := filepath.Join(pkiDir, "ca.crt")
+	srvPath := filepath.Join(pkiDir, "server.crt")
+	srvKeyPath := filepath.Join(pkiDir, "server.key")
+	crlPath := filepath.Join(pkiDir, "ca.crl")
+
+	if _, err := os.Stat(caPath); os.IsNotExist(err) {
+		if _, err := mtls.InitPKI(pkiDir, []string{"127.0.0.1", "localhost"}, []string{"postgres", "127.0.0.1", "localhost"}, 0); err != nil {
+			return fmt.Errorf("auto-init pki: %w", err)
+		}
+	}
+
+	caCert, caKey, caErr := mtls.LoadCA(pkiDir)
+	if caErr != nil {
+		// Allow running without ca.key if ca.crt + ca.crl + server.crt + server.key exist.
+		caCert, err := mtls.LoadCertificate(caPath)
+		if err != nil {
+			return err
+		}
+		crl, err := mtls.LoadCRL(crlPath, caCert)
+		if err != nil {
+			return err
+		}
+		s.crlMgr = crl
+	} else {
+		now := time.Now().UTC()
+		if cert, err := mtls.LoadCertificate(srvPath); err != nil || mtls.NeedsRenewal(cert, now) {
+			if _, ierr := mtls.IssueCert(pkiDir, "server", mtls.RoleServer, []string{"127.0.0.1", "localhost"}, mtls.DefaultServerTTL); ierr != nil {
+				return fmt.Errorf("issue/renew server cert: %w", ierr)
+			}
+		}
+		if _, err := os.Stat(srvKeyPath); err != nil {
+			return fmt.Errorf("missing server.key: %w", err)
+		}
+		crl, err := mtls.OpenCRLManager(caCert, caKey, crlPath)
+		if err != nil {
+			return err
+		}
+		s.crlMgr = crl
+
+		clientCertPath := filepath.Join(pkiDir, "client.crt")
+		clientKeyPath := filepath.Join(pkiDir, "client.key")
+		_, cerr := os.Stat(clientCertPath)
+		_, kerr := os.Stat(clientKeyPath)
+		if cerr != nil || kerr != nil {
+			if _, ierr := mtls.IssueCert(pkiDir, "client", mtls.RoleClient, nil, mtls.DefaultClientTTL); ierr != nil {
+				return fmt.Errorf("issue default client cert: %w", ierr)
+			}
+		} else if cCert, lerr := mtls.LoadCertificate(clientCertPath); lerr == nil && mtls.NeedsRenewal(cCert, now) {
+			if _, ierr := mtls.IssueCert(pkiDir, "client", mtls.RoleClient, nil, mtls.DefaultClientTTL); ierr != nil {
+				return fmt.Errorf("renew default client cert: %w", ierr)
+			}
+		}
+	}
+
+	if clientCert, err := mtls.LoadCertificate(filepath.Join(pkiDir, "client.crt")); err == nil {
+		s.bootstrapCertFP = mtls.CertFingerprintSHA256(clientCert)
+		s.bootstrapSerial = mtls.FormatSerial(clientCert.SerialNumber)
+	}
+	return nil
+}
+
 func (s *Server) initAuthToken(explicitTokenFile string) error {
 	if err := validateSecureDir(s.workDir); err != nil {
 		return err
@@ -1749,6 +2556,7 @@ func (s *Server) initAuthToken(explicitTokenFile string) error {
 			}
 			s.tokenFile = explicitTokenFile
 		}
+		s.registerSession(envToken, s.bootstrapCertFP, s.bootstrapSerial, defaultTokenTTL)
 		return nil
 	}
 	tok, err := generateRandomToken()
@@ -1764,7 +2572,21 @@ func (s *Server) initAuthToken(explicitTokenFile string) error {
 		return err
 	}
 	s.tokenFile = tf
+	s.registerSession(tok, s.bootstrapCertFP, s.bootstrapSerial, defaultTokenTTL)
 	return nil
+}
+
+func (s *Server) tlsConfig() (*tls.Config, error) {
+	return mtls.ServerTLSConfig(
+		filepath.Join(s.pkiDir, "server.crt"),
+		filepath.Join(s.pkiDir, "server.key"),
+		filepath.Join(s.pkiDir, "ca.crt"),
+		s.crlMgr,
+		mtls.TLSOptions{
+			AllowClassicalFallback: s.allowClassicalFallback,
+			ExtraRevokedCheck:      s.isSerialRevoked,
+		},
+	)
 }
 
 func main() {
@@ -1776,11 +2598,19 @@ func main() {
 		defaultDir = absDir
 	}
 
-	addr := flag.String("addr", "127.0.0.1:40056", "TCP listen address for Qt desktop clients")
+	addr := flag.String("addr", "127.0.0.1:40056", "TLS listen address for Qt desktop clients")
 	tempestDir := flag.String("tempest-dir", defaultDir, "Directory containing built Tempest binaries")
 	workDir := flag.String("work-dir", defaultWorkDir(), "Workspace directory for runtime state and KCM output")
 	kcmSock := flag.String("kcm-socket", "", "Explicit KCM UNIX socket path to monitor (default: auto-discover system KCM socket)")
 	tokenFile := flag.String("token-file", "", "Path to write 0600 RPC auth token when CIEL_AUTH_TOKEN is unset")
+	pkiDirFlag := flag.String("pki-dir", "", "PKI directory containing ca.crt, server.crt, server.key, ca.crl (default: <work-dir>/pki)")
+	vaultDirFlag := flag.String("vault-dir", "", "Shuna vault directory (default: <work-dir>/vault)")
+	pgDSNFlag := flag.String("pg-dsn", "", "PostgreSQL 16 DSN (overrides CIEL_PG_DSN and ~/.config/ciel/pg.dsn)")
+	pgInsecureLocal := flag.Bool("pg-insecure-local", false, "Allow non-verify-full PostgreSQL TLS on loopback only (dev override)")
+	vaultPassEnv := flag.String("vault-passphrase-env", "", "Environment variable holding Shuna vault passphrase")
+	strictMlock := flag.Bool("strict-mlock", false, "Fail closed if mlock fails for Shuna DEKs")
+	strictLockoutWipe := flag.Bool("strict-lockout-wipe", false, "Zeroize DEKs and lock vault until admin unlock-reset on 5th failed unlock")
+	allowClassical := flag.Bool("allow-classical-tls-fallback", false, "Allow X25519 TLS 1.3 fallback alongside X25519MLKEM768")
 	flag.Parse()
 
 	selfExe, err := os.Executable()
@@ -1811,34 +2641,95 @@ func main() {
 		resolvedWorkDir = absWork
 	}
 
-	srv := &Server{
-		tempestDir:  resolvedTempestDir,
-		tanukiBin:   findTanukiBin(selfExe, resolvedTempestDir),
-		workDir:     resolvedWorkDir,
-		selfExe:     selfExe,
-		kcmSockPath: strings.TrimSpace(*kcmSock),
-		connSem:     make(chan struct{}, 32),
+	resolvedPKIDir := strings.TrimSpace(*pkiDirFlag)
+	if resolvedPKIDir == "" {
+		resolvedPKIDir = filepath.Join(resolvedWorkDir, "pki")
+	} else if absPKI, absErr := filepath.Abs(resolvedPKIDir); absErr == nil {
+		resolvedPKIDir = absPKI
 	}
-	if err := srv.initAuthToken(*tokenFile); err != nil {
-		fmt.Fprintf(os.Stderr, "ciel-teamserver: auth/workspace init failed: %v\n", err)
+
+	resolvedVaultDir := strings.TrimSpace(*vaultDirFlag)
+	if resolvedVaultDir == "" {
+		resolvedVaultDir = filepath.Join(resolvedWorkDir, "vault")
+	} else if absVault, absErr := filepath.Abs(resolvedVaultDir); absErr == nil {
+		resolvedVaultDir = absVault
+	}
+
+	srv := &Server{
+		tempestDir:             resolvedTempestDir,
+		tanukiBin:              findTanukiBin(selfExe, resolvedTempestDir),
+		workDir:                resolvedWorkDir,
+		selfExe:                selfExe,
+		kcmSockPath:            strings.TrimSpace(*kcmSock),
+		requireTLSBinding:      true,
+		allowClassicalFallback: *allowClassical,
+		connSem:                make(chan struct{}, 32),
+		revokedSerials:         make(map[string]bool),
+		activeConns:            make(map[net.Conn]peerConnInfo),
+	}
+
+	if err := validateSecureDir(srv.workDir); err != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: workspace init failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := srv.initPKI(resolvedPKIDir); err != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: PKI init failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	ln, err := net.Listen("tcp", *addr)
+	pgDSN, pgSource := ResolvePGDSN(*pgDSNFlag)
+	passEnvName := strings.TrimSpace(*vaultPassEnv)
+	if passEnvName == "" {
+		passEnvName = "CIEL_VAULT_PASSPHRASE"
+	}
+	initialPass := []byte(os.Getenv(passEnvName))
+	defer kdf.WipeBytes(initialPass)
+
+	storage, stErr := NewStorage(context.Background(), pgDSN, resolvedPKIDir, resolvedVaultDir, initialPass, *pgInsecureLocal, *strictMlock, *strictLockoutWipe)
+	if stErr != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: database/vault init failed (source=%s): %v\n", pgSource, stErr)
+		os.Exit(3)
+	}
+	srv.storage = storage
+	defer storage.Close()
+
+	if storage.DBConnected() {
+		if revs, rerr := storage.LoadRevokedSerials(context.Background()); rerr == nil {
+			srv.revokedMu.Lock()
+			for k, v := range revs {
+				srv.revokedSerials[k] = v
+			}
+			srv.revokedMu.Unlock()
+		}
+	}
+
+	if err := srv.initAuthToken(*tokenFile); err != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: auth/token init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	tlsCfg, err := srv.tlsConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: TLS config failed: %v\n", err)
+		os.Exit(1)
+	}
+	tcpLn, err := net.Listen("tcp", *addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ciel-teamserver: listen %s failed: %v\n", *addr, err)
 		os.Exit(1)
 	}
+	ln := tls.NewListener(tcpLn, tlsCfg)
 	defer ln.Close()
 
-	fmt.Printf("[ciel-teamserver] listening on %s (tempest=%s, workspace=%s, token_file=%s)\n",
-		ln.Addr().String(), srv.tempestDir, srv.workDir, srv.tokenFile)
+	fmt.Printf("[ciel-teamserver] mTLS 1.3 (X25519MLKEM768) listening on %s (db_connected=%v, ssl_mode=%s, workspace=%s, pki=%s, token_file=%s)\n",
+		ln.Addr().String(), storage.DBConnected(), storage.SSLMode(), srv.workDir, srv.pkiDir, srv.tokenFile)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		_ = ln.Close()
+		storage.Close()
 		os.Exit(0)
 	}()
 

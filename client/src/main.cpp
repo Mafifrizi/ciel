@@ -48,6 +48,11 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QSslCertificate>
+#include <QSslConfiguration>
+#include <QSslError>
+#include <QSslKey>
+#include <QSslSocket>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleOptionGraphicsItem>
@@ -1065,11 +1070,15 @@ public:
     explicit CielWindow(const QString &initialAddr,
                         const QString &explicitToken = QString(),
                         const QString &tokenFilePath = QString(),
+                        const QString &pkiDirPath = QString(),
+                        bool allowClassicalTlsFallback = false,
                         QWidget *parent = nullptr)
         : QMainWindow(parent),
           m_serverAddr(initialAddr),
           m_authToken(explicitToken.trimmed()),
-          m_tokenFilePath(tokenFilePath.trimmed()) {
+          m_tokenFilePath(tokenFilePath.trimmed()),
+          m_pkiDir(pkiDirPath.trimmed()),
+          m_allowClassicalTlsFallback(allowClassicalTlsFallback) {
         m_localUser = qEnvironmentVariable("USER");
         if (m_localUser.isEmpty()) {
             m_localUser = qEnvironmentVariable("USERNAME");
@@ -1103,6 +1112,15 @@ public:
             m_workDir = !cacheDir.isEmpty() ? (cacheDir + "/ciel_workspace") : ("/tmp/ciel_workspace" + uidSuffix);
         }
 
+        if (m_pkiDir.isEmpty() && !m_tokenFilePath.isEmpty()) {
+            const QString siblingPki = QFileInfo(m_tokenFilePath).absolutePath() + "/pki";
+            if (QFile::exists(siblingPki + "/ca.crt")) {
+                m_pkiDir = siblingPki;
+            }
+        }
+        if (m_pkiDir.isEmpty()) {
+            m_pkiDir = m_workDir + "/pki";
+        }
         if (m_authToken.isEmpty()) {
             m_authToken = qEnvironmentVariable("CIEL_AUTH_TOKEN").trimmed();
         }
@@ -1173,6 +1191,11 @@ public:
         if (!executeAction("ping", QJsonObject(), pingResp, false) ||
             !pingResp.value("ok").toBool(false)) {
             return fail("ping RPC failed");
+        }
+        const QJsonObject pingData = pingResp.value("data").toObject();
+        if (!pingData.value("mtls_enforced").toBool(false) ||
+            !pingData.value("pqc_group").toString().contains("X25519MLKEM768")) {
+            return fail("Expected mTLS 1.3 X25519MLKEM768 enforcement in ping response");
         }
 
         QJsonObject syncResp;
@@ -1608,10 +1631,46 @@ public slots:
             m_lastExplicitTanukiSubcmd = "doctor";
         }
         QJsonObject resp;
-        executeAction("full_sync", targetParams(), resp, background);
+        if (executeAction("full_sync", targetParams(), resp, background)) {
+            maybeLoadProfileFromDb();
+        }
     }
 
 private:
+    void maybeLoadProfileFromDb() {
+        if (!m_dbConnected || m_vaultLocked || m_profileLoadedFromDb || m_actionInFlight) {
+            return;
+        }
+        m_profileLoadedFromDb = true;
+        const bool allEmpty =
+            (!m_ccacheEdit || m_ccacheEdit->text().trimmed().isEmpty()) &&
+            (!m_keytabEdit || m_keytabEdit->text().trimmed().isEmpty()) &&
+            (!m_krb5ConfEdit || m_krb5ConfEdit->text().trimmed().isEmpty()) &&
+            (!m_kcmSockEdit || m_kcmSockEdit->text().trimmed().isEmpty());
+        if (!allEmpty) {
+            return;
+        }
+        QJsonObject profResp;
+        if (executeAction("profile_get", QJsonObject(), profResp, true) &&
+            profResp.value("ok").toBool(false)) {
+            const QJsonObject d = profResp.value("data").toObject();
+            if (d.value("found").toBool(false)) {
+                if (m_ccacheEdit) m_ccacheEdit->setText(d.value("ccache_path").toString());
+                if (m_keytabEdit) m_keytabEdit->setText(d.value("keytab_path").toString());
+                if (m_krb5ConfEdit) m_krb5ConfEdit->setText(d.value("krb5_conf_path").toString());
+                if (m_kcmSockEdit) m_kcmSockEdit->setText(d.value("kcm_socket").toString());
+                commitTargetFieldsFromEdits();
+            }
+        }
+    }
+
+    void saveProfileIfDbConnected() {
+        if (!m_dbConnected || m_vaultLocked) {
+            return;
+        }
+        QJsonObject profResp;
+        (void)executeAction("profile_save", targetParams(), profResp, true);
+    }
     void commitTargetFieldsFromEdits() {
         if (m_ccacheEdit) {
             m_committedCcache = m_ccacheEdit->text().trimmed();
@@ -2233,9 +2292,11 @@ private:
 
         m_operativeInput = new QLineEdit(panel);
         m_operativeInput->setObjectName("OperativeInput");
-        m_operativeInput->setPlaceholderText("Command (help, audit, sync, set, souei, watch <path>, chronoa [ccache], renew, ranga, isolate, purge <path>, tanuki <cmd> ...)");
+        m_operativeInput->setPlaceholderText("Command (help, audit, sync, set, hosts, history, unlock, rotate, backup, souei, chronoa, ranga, tanuki <cmd> ...)");
         const QStringList cmds = {
-            "help", "audit", "sync", "set", "souei", "watch", "chronoa", "renew",
+            "help", "audit", "sync", "set", "hosts", "history", "unlock", "rotate", "backup",
+            "token_rotate", "cert_revoke",
+            "souei", "watch", "chronoa", "renew",
             "ranga", "isolate", "purge",
             "tanuki doctor", "tanuki fix", "tanuki keytab", "tanuki config",
             "tanuki triage SKEW", "tanuki ladder", "tanuki nhi scan", "tanuki nhi mesh",
@@ -2285,7 +2346,7 @@ private:
                                      : "remote-rpc";
 
         const QList<QStringList> defaults = {
-            {"ciel-teamserver-rpc", "TCP/JSON+Token", m_serverAddr, rpcScope, "auth-enforced", "OFFLINE"},
+            {"ciel-teamserver-rpc", "mTLS 1.3 / X25519MLKEM768", m_serverAddr, rpcScope, "standalone | mTLS", "OFFLINE"},
             {"souei-keyring-sensor", "ProcKeys/SO_PEERCRED", "auto-detect", "uid=" + m_localUid, "inotify", "OFFLINE"},
             {"chronoa-ccache-guard", "MIT-CCACHE-v3/v4", "auto ($KRB5CCNAME)", "RFC4120", "kinit -R", "OFFLINE"},
             {"ranga-keyring-jail", "SYS_keyctl", "session-keyring", "0x3f000000", "NIST-800-88", "OFFLINE"},
@@ -2358,7 +2419,10 @@ private:
         auto *clearBtn = new QPushButton("Reset Auto", panel);
         clearBtn->setObjectName("SecondaryBtn");
         clearBtn->setToolTip("Clear custom target paths and revert to host auto-discovery");
-        connect(applyBtn, &QPushButton::clicked, this, [this]() { runFullSync(false); });
+        connect(applyBtn, &QPushButton::clicked, this, [this]() {
+            runFullSync(false);
+            saveProfileIfDbConnected();
+        });
         connect(clearBtn, &QPushButton::clicked, this, [this]() {
             m_ccacheEdit->clear();
             m_keytabEdit->clear();
@@ -2366,6 +2430,7 @@ private:
             m_kcmSockEdit->clear();
             commitTargetFieldsFromEdits();
             runFullSync(false);
+            saveProfileIfDbConnected();
         });
         cfgGrid->addWidget(applyBtn, 0, 6);
         cfgGrid->addWidget(clearBtn, 1, 6);
@@ -2786,6 +2851,13 @@ private:
             "  -------         ---------        -----------\n"
             "  sync                             Full host sweep across Souei, Chronoa, Ranga, and Tanuki\n"
             "  set             &lt;key&gt; &lt;val&gt;  Set target (ccache|keytab|krb5conf|kcm|clear) or show active\n"
+            "  hosts                            List fleet hosts decrypted from PostgreSQL via Shuna\n"
+            "  history         [op_id] [limit]  Inspect decrypted audit events &amp; telemetry snapshots\n"
+            "  unlock          [passphrase]     Unlock Shuna vault (rate-limited Argon2id)\n"
+            "  rotate          [new_pass]       Dual-key online Shuna DEK rotation (batched re-encrypt)\n"
+            "  backup          [out_path]       Export SHUNAS1 encrypted pg_dump archive\n"
+            "  token_rotate                     Rotate mTLS-bound 256-bit session auth_token (30s grace)\n"
+            "  cert_revoke     &lt;serial&gt; [why]   Revoke mTLS client cert in CRL + DB &amp; drop sockets\n"
             "  souei                            Probe /proc/keys ACLs, session keyring, and real KCM socket\n"
             "  watch           [path] [ms]      Attach Linux inotify access monitor to real file\n"
             "  chronoa         [ccache_path]    Evaluate MIT CCACHE v3/v4 lifetimes and cipher strength\n"
@@ -2907,6 +2979,7 @@ private:
                 m_krb5ConfEdit->clear();
                 m_kcmSockEdit->clear();
                 commitTargetFieldsFromEdits();
+                saveProfileIfDbConnected();
                 appendTaskDone("Cleared custom target overrides (reverted to host auto-discovery; run 'sync' to refresh)");
                 return;
             }
@@ -2923,7 +2996,148 @@ private:
                 return;
             }
             commitTargetFieldsFromEdits();
+            saveProfileIfDbConnected();
             appendTaskDone(QString("Updated %1 = %2 (run 'sync' to probe new target)").arg(key, val.isEmpty() ? "<auto>" : val));
+            return;
+        }
+        if (cmd == "hosts") {
+            QJsonObject resp;
+            if (!executeAction("host_list", QJsonObject(), resp, false)) {
+                return;
+            }
+            const QJsonArray hosts = resp.value("data").toObject().value("hosts").toArray();
+            if (hosts.isEmpty()) {
+                appendTaskInfo("No encrypted fleet hosts recorded in PostgreSQL yet.");
+                return;
+            }
+            QString table = "\n  HOST_ID (HMAC)    HOSTNAME          USER@ARCH            KV   STATUS      LAST_SEEN\n"
+                            "  --------------    --------          ---------            --   ------      ---------\n";
+            for (const QJsonValue &hv : hosts) {
+                const QJsonObject o = hv.toObject();
+                const QJsonObject m = o.value("meta").toObject();
+                const QString hid = o.value("host_id").toString().left(14);
+                const QString hn = m.value("hostname").toString().left(16);
+                const QString ua = QString("%1/%2").arg(m.value("username").toString(), m.value("arch").toString()).left(19);
+                const QString kv = QString::number(o.value("key_version").toInt());
+                const QString st = o.value("status").toString().left(10);
+                const QString ls = o.value("last_seen_at").toString().left(19);
+                table += QString("  %1  %2  %3  %4  %5  %6\n")
+                             .arg(htmlEsc(hid.leftJustified(16, ' ')),
+                                  htmlEsc(hn.leftJustified(16, ' ')),
+                                  htmlEsc(ua.leftJustified(19, ' ')),
+                                  htmlEsc(kv.leftJustified(3, ' ')),
+                                  htmlEsc(st.leftJustified(10, ' ')),
+                                  htmlEsc(ls));
+            }
+            appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(table));
+            return;
+        }
+        if (cmd == "history") {
+            QJsonObject p;
+            if (tokens.size() >= 2) {
+                const QString arg1 = tokens[1];
+                if (arg1.startsWith("OP-", Qt::CaseInsensitive)) {
+                    p["operative_id"] = arg1.toUpper();
+                } else {
+                    bool okLim = false;
+                    const int lim = arg1.toInt(&okLim);
+                    if (okLim && lim > 0) {
+                        p["limit"] = lim;
+                    } else {
+                        p["host_id"] = arg1;
+                    }
+                }
+            }
+            if (tokens.size() >= 3) {
+                bool okLim = false;
+                const int lim = tokens[2].toInt(&okLim);
+                if (okLim && lim > 0) {
+                    p["limit"] = lim;
+                }
+            }
+            QJsonObject resp;
+            if (!executeAction("history_list", p, resp, false)) {
+                return;
+            }
+            const QJsonObject d = resp.value("data").toObject();
+            const QJsonArray evs = d.value("events").toArray();
+            const QJsonArray snaps = d.value("snapshots").toArray();
+            appendTaskInfo(QString("Decrypted %1 audit event(s) and %2 snapshot(s) from PostgreSQL:")
+                               .arg(evs.size()).arg(snaps.size()));
+            for (const QJsonValue &evVal : evs) {
+                const QJsonObject ev = evVal.toObject();
+                const QJsonObject det = ev.value("detail").toObject();
+                appendTaskNeutral(QString("[%1] %2 %3 (%4) :: %5")
+                                      .arg(ev.value("created_at").toString().left(19),
+                                           ev.value("operative_id").toString(),
+                                           ev.value("status").toString(),
+                                           ev.value("severity").toString(),
+                                           det.value("summary").toString()));
+            }
+            return;
+        }
+        if (cmd == "unlock") {
+            QString pass;
+            if (tokens.size() >= 2) {
+                pass = tokens.mid(1).join(' ');
+            } else {
+                bool okPass = false;
+                pass = QInputDialog::getText(this, "Unlock Shuna Vault", "Vault passphrase:", QLineEdit::Password, QString(), &okPass);
+                if (!okPass || pass.isEmpty()) {
+                    return;
+                }
+            }
+            QJsonObject p;
+            p["passphrase"] = pass;
+            QJsonObject resp;
+            if (executeAction("vault_unlock", p, resp, false) && resp.value("ok").toBool(false)) {
+                m_vaultLocked = false;
+                updateListenersTable();
+                maybeLoadProfileFromDb();
+            }
+            return;
+        }
+        if (cmd == "rotate") {
+            QJsonObject p;
+            if (tokens.size() >= 2) {
+                p["new_passphrase"] = tokens.mid(1).join(' ');
+            }
+            QJsonObject resp;
+            (void)executeAction("vault_rotate", p, resp, false);
+            return;
+        }
+        if (cmd == "backup") {
+            QJsonObject p;
+            if (tokens.size() >= 2) {
+                p["out_path"] = tokens[1];
+            }
+            QJsonObject resp;
+            (void)executeAction("backup_export", p, resp, false);
+            return;
+        }
+        if (cmd == "token_rotate") {
+            QJsonObject resp;
+            if (executeAction("token_rotate", QJsonObject(), resp, false) && resp.value("ok").toBool(false)) {
+                const QString newTok = resp.value("data").toObject().value("auth_token").toString();
+                if (!newTok.isEmpty()) {
+                    m_authToken = newTok;
+                    appendTaskDone("Updated active session auth_token in client memory (30s grace overlap)");
+                }
+            }
+            return;
+        }
+        if (cmd == "cert_revoke") {
+            if (tokens.size() < 2) {
+                appendTaskAlert("Usage: cert_revoke <serial_hex> [reason]");
+                return;
+            }
+            QJsonObject p;
+            p["serial_hex"] = tokens[1];
+            if (tokens.size() >= 3) {
+                p["reason"] = tokens[2];
+            }
+            QJsonObject resp;
+            (void)executeAction("cert_revoke", p, resp, false);
             return;
         }
         if (cmd == "souei") {
@@ -3397,11 +3611,17 @@ private:
             it->setForeground(colr);
         };
 
+        setCell(0, 1, QString("mTLS 1.3 / %1").arg(m_pqcGroup));
         setCell(0, 2, m_serverAddr);
         setCell(0, 3, rpcScope);
-        setCell(0, 4, "auth-enforced");
+        const QString capText = m_dbConnected
+                                    ? QString("PG16:%1 | kv=%2").arg(m_sslMode).arg(m_shunaKeyVersion)
+                                    : QString("standalone | mTLS");
+        setCell(0, 4, capText);
         if (m_authFailed) {
             setCell(0, 5, "UNAUTHORIZED", QColor("#ff5555"));
+        } else if (m_vaultLocked) {
+            setCell(0, 5, "VAULT_LOCKED", QColor("#f1fa8c"));
         } else {
             setCell(0, 5, m_teamserverOnline ? "ONLINE" : "OFFLINE",
                     m_teamserverOnline ? QColor("#50fa7b") : QColor("#ff5555"));
@@ -3486,6 +3706,36 @@ private:
         if (data.contains("kinit_available")) {
             m_kinitAvailable = data.value("kinit_available").toBool(false);
         }
+        if (data.contains("db_connected")) {
+            m_dbConnected = data.value("db_connected").toBool(false);
+        }
+        if (data.contains("ssl_mode")) {
+            m_sslMode = data.value("ssl_mode").toString("standalone");
+        }
+        if (data.contains("pqc_group")) {
+            const QString g = data.value("pqc_group").toString();
+            if (!g.isEmpty()) {
+                m_pqcGroup = g;
+            }
+        }
+        if (data.contains("shuna_key_version")) {
+            m_shunaKeyVersion = data.value("shuna_key_version").toInt(0);
+        }
+        if (data.contains("vault_locked")) {
+            m_vaultLocked = data.value("vault_locked").toBool(false);
+        }
+        if (data.contains("rotation_in_progress")) {
+            m_rotationInProgress = data.value("rotation_in_progress").toBool(false);
+        }
+        if (data.contains("token_expires_at")) {
+            m_tokenExpiresAt = data.value("token_expires_at").toString();
+        }
+        if (data.contains("client_cert_serial")) {
+            m_clientCertSerial = data.value("client_cert_serial").toString();
+        }
+        if (data.contains("host_id")) {
+            m_hostId = data.value("host_id").toString();
+        }
 
         if (changed) {
             if (m_sessionBanner) {
@@ -3495,18 +3745,37 @@ private:
             }
         }
         if (QTextEdit *tsPane = m_contextPanes.value("TEAMSERVER", nullptr)) {
+            const QString vaultState = (m_shunaKeyVersion == 0 && !m_dbConnected)
+                                           ? QString("ephemeral (no vault)")
+                                           : (m_vaultLocked
+                                                  ? QString("VAULT_LOCKED (key_version=%1)").arg(m_shunaKeyVersion)
+                                                  : QString("UNLOCKED (key_version=%1%2)").arg(m_shunaKeyVersion).arg(m_rotationInProgress ? ", rotating" : ""));
+            const QString dbState = m_dbConnected
+                                        ? QString("connected (sslmode=%1)").arg(m_sslMode)
+                                        : QString("standalone (ephemeral)");
             const QString tsStable = QString(
                 "[TEAMSERVER] ciel-teamserver endpoint : %1\n"
-                "Operator / Host   : %2@%3 (uid=%4, arch=%5)\n"
-                "Workspace         : %6\n"
-                "Resolved CCACHE   : %7\n"
-                "Resolved Keytab   : %8\n"
-                "Resolved krb5.conf: %9\n"
-                "Resolved KCM Sock : %10\n"
-                "kinit -R Available: %11\n"
-                "Auth Enforced     : true (per-session 256-bit token)\n")
-                                         .arg(m_serverAddr, m_localUser, m_localHost, m_localUid, m_localArch,
-                                              m_workDir,
+                "Transport Security: mTLS 1.3 (%2, serial=%3)\n"
+                "Token Expires At  : %4\n"
+                "PostgreSQL FleetDB: %5\n"
+                "Shuna Vault       : %6\n"
+                "Operator / Host   : %7@%8 (uid=%9, arch=%10)\n"
+                "Workspace         : %11\n"
+                "PKI Directory     : %12\n"
+                "Resolved CCACHE   : %13\n"
+                "Resolved Keytab   : %14\n"
+                "Resolved krb5.conf: %15\n"
+                "Resolved KCM Sock : %16\n"
+                "kinit -R Available: %17\n"
+                "Auth Enforced     : true (mTLS cert-bound 256-bit token)\n")
+                                         .arg(m_serverAddr,
+                                              m_pqcGroup,
+                                              m_clientCertSerial.isEmpty() ? "-" : m_clientCertSerial,
+                                              m_tokenExpiresAt.isEmpty() ? "-" : m_tokenExpiresAt,
+                                              dbState,
+                                              vaultState,
+                                              m_localUser, m_localHost, m_localUid, m_localArch,
+                                              m_workDir, m_pkiDir,
                                               m_resolvedCCache.isEmpty() ? "none" : m_resolvedCCache,
                                               m_resolvedKeytab.isEmpty() ? "none" : m_resolvedKeytab,
                                               m_resolvedKrb5Conf.isEmpty() ? "none" : m_resolvedKrb5Conf,
@@ -3590,7 +3859,14 @@ private:
             QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
             env.insert("CIEL_AUTH_TOKEN", m_authToken);
             m_managedServer->setProcessEnvironment(env);
-            m_managedServer->start(binPath, {"--addr", m_serverAddr});
+            QStringList srvArgs = {"--addr", m_serverAddr, "--work-dir", m_workDir, "--pki-dir", m_pkiDir};
+            if (!m_tokenFilePath.isEmpty()) {
+                srvArgs << "--token-file" << m_tokenFilePath;
+            }
+            if (m_allowClassicalTlsFallback) {
+                srvArgs << "--allow-classical-tls-fallback";
+            }
+            m_managedServer->start(binPath, srvArgs);
             if (!m_managedServer->waitForStarted(2000)) {
                 appendEventLog("!", "#ff5555", "Failed launching ciel-teamserver: " + htmlEsc(binPath));
                 return false;
@@ -3629,7 +3905,8 @@ private:
             rowStatus == "CONNECTION_FAILED" || rowStatus == "BIND_FAILED" ||
             rowStatus == "PARSE_ERROR" || rowStatus == "PURGE_FAILED" ||
             rowStatus == "ERROR" || rowStatus == "CRITICAL" ||
-            rowStatus == "USAGE_ERROR" || rowStatus == "UNAUTHORIZED") {
+            rowStatus == "USAGE_ERROR" || rowStatus == "UNAUTHORIZED" ||
+            rowStatus == "VAULT_LOCKED") {
             return true;
         }
         if (rawLine.contains("status=CLOCK_SKEW_VIOLATION") || rawLine.contains("status=EXPIRED") ||
@@ -3673,6 +3950,53 @@ private:
         return it ? it->text() : QString();
     }
 
+    bool buildSslConfiguration(QSslConfiguration &cfgOut, QString &errOut) const {
+        if (!QSslSocket::supportsSsl()) {
+            errOut = "Qt6 TLS/OpenSSL backend unavailable";
+            return false;
+        }
+        const QString caPath = m_pkiDir + "/ca.crt";
+        const QString certPath = m_pkiDir + "/client.crt";
+        const QString keyPath = m_pkiDir + "/client.key";
+        const QList<QSslCertificate> caCerts = QSslCertificate::fromPath(caPath, QSsl::Pem);
+        if (caCerts.isEmpty()) {
+            errOut = "Missing or invalid CA certificate: " + caPath;
+            return false;
+        }
+        const QList<QSslCertificate> cliCerts = QSslCertificate::fromPath(certPath, QSsl::Pem);
+        if (cliCerts.isEmpty()) {
+            errOut = "Missing or invalid mTLS client certificate: " + certPath;
+            return false;
+        }
+        QFile keyFile(keyPath);
+        if (!keyFile.open(QIODevice::ReadOnly)) {
+            errOut = "Unable to open mTLS client private key: " + keyPath;
+            return false;
+        }
+        const QByteArray keyBytes = keyFile.readAll();
+        keyFile.close();
+        QSslKey cliKey(keyBytes, QSsl::Ec, QSsl::Pem, QSsl::PrivateKey);
+        if (cliKey.isNull()) {
+            cliKey = QSslKey(keyBytes, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+        }
+        if (cliKey.isNull()) {
+            errOut = "Invalid mTLS client private key PEM: " + keyPath;
+            return false;
+        }
+
+        cfgOut = QSslConfiguration::defaultConfiguration();
+        cfgOut.setProtocol(QSsl::TlsV1_3);
+        cfgOut.setPeerVerifyMode(QSslSocket::VerifyPeer);
+        cfgOut.setCaCertificates(caCerts);
+        cfgOut.setLocalCertificate(cliCerts.first());
+        cfgOut.setPrivateKey(cliKey);
+        cfgOut.setBackendConfigurationOption(
+            "Groups",
+            m_allowClassicalTlsFallback ? QByteArray("X25519MLKEM768:X25519")
+                                        : QByteArray("X25519MLKEM768"));
+        return true;
+    }
+
     bool executeAction(const QString &action, const QJsonObject &extraParams, QJsonObject &respOut, bool background = false) {
         if (m_actionInFlight) {
             if (!background && action != "full_sync") {
@@ -3706,6 +4030,18 @@ private:
             m_authToken = loadAuthTokenFromDisk();
         }
 
+        QSslConfiguration sslCfg;
+        QString sslCfgErr;
+        if (!buildSslConfiguration(sslCfg, sslCfgErr)) {
+            m_teamserverOnline = false;
+            updateListenersTable();
+            if (!background) {
+                appendEventLog("!", "#ff5555", "mTLS configuration failed (fail-closed): " + htmlEsc(sslCfgErr));
+                appendTaskAlert("mTLS config error: " + sslCfgErr);
+            }
+            return false;
+        }
+
         QJsonObject req = extraParams;
         req["action"] = action;
         if (!m_authToken.isEmpty()) {
@@ -3713,7 +4049,8 @@ private:
         }
         const QByteArray wire = QJsonDocument(req).toJson(QJsonDocument::Compact) + '\n';
 
-        QTcpSocket sock;
+        QSslSocket sock;
+        sock.setSslConfiguration(sslCfg);
         QEventLoop loop;
         QTimer timeoutTimer;
         timeoutTimer.setSingleShot(true);
@@ -3723,17 +4060,24 @@ private:
         bool timedOut = false;
         bool writeErr = false;
         QString sockErr;
+        QStringList tlsErrList;
 
-        connect(&sock, &QTcpSocket::connected, &loop, [&]() {
+        connect(&sock, &QSslSocket::encrypted, &loop, [&]() {
             if (sock.write(wire) != wire.size()) {
                 writeErr = true;
-                sockErr = "TCP write error for action " + action;
+                sockErr = "mTLS write error for action " + action;
                 loop.quit();
                 return;
             }
             sock.flush();
         });
-        connect(&sock, &QTcpSocket::readyRead, &loop, [&]() {
+        connect(&sock, &QSslSocket::sslErrors, &loop, [&](const QList<QSslError> &errs) {
+            for (const QSslError &e : errs) {
+                tlsErrList.append(e.errorString());
+            }
+            // Fail closed: never ignoreSslErrors().
+        });
+        connect(&sock, &QSslSocket::readyRead, &loop, [&]() {
             if (sock.isOpen() && sock.bytesAvailable() > 0) {
                 rx.append(sock.readAll());
                 if (rx.contains('\n')) {
@@ -3742,13 +4086,13 @@ private:
                 }
             }
         });
-        connect(&sock, &QTcpSocket::errorOccurred, &loop, [&](QAbstractSocket::SocketError) {
+        connect(&sock, &QSslSocket::errorOccurred, &loop, [&](QAbstractSocket::SocketError) {
             if (!gotLine) {
-                sockErr = sock.errorString();
+                sockErr = tlsErrList.isEmpty() ? sock.errorString() : tlsErrList.join("; ");
                 loop.quit();
             }
         });
-        connect(&sock, &QTcpSocket::disconnected, &loop, [&]() {
+        connect(&sock, &QSslSocket::disconnected, &loop, [&]() {
             if (sock.isOpen() && sock.bytesAvailable() > 0) {
                 rx.append(sock.readAll());
                 if (rx.contains('\n')) {
@@ -3763,7 +4107,7 @@ private:
         });
 
         timeoutTimer.start(20000);
-        sock.connectToHost(host, port);
+        sock.connectToHostEncrypted(host, port);
         loop.exec();
         timeoutTimer.stop();
         disconnect(&sock, nullptr, nullptr, nullptr);
@@ -3773,14 +4117,16 @@ private:
 
         if (timedOut) {
             if (m_teamserverOnline || !background) {
-                appendEventLog("!", "#ff5555", "Timeout waiting for teamserver action " + htmlEsc(action));
+                appendEventLog("!", "#ff5555", "Timeout waiting for teamserver mTLS action " + htmlEsc(action));
             }
             m_teamserverOnline = false;
             updateListenersTable();
             return false;
         }
         if (writeErr || !gotLine) {
-            const QString msg = sockErr.isEmpty() ? ("Failed RPC for action " + action) : sockErr;
+            const QString msg = !tlsErrList.isEmpty()
+                                    ? ("mTLS verification failed: " + tlsErrList.join("; "))
+                                    : (sockErr.isEmpty() ? ("Failed mTLS RPC for action " + action) : sockErr);
             if (m_teamserverOnline || !background) {
                 appendEventLog("!", "#ff5555", htmlEsc(msg));
             }
@@ -3800,7 +4146,8 @@ private:
         }
 
         respOut = doc.object();
-        if (respOut.value("status").toString() == "UNAUTHORIZED") {
+        const QString respStatus = respOut.value("status").toString();
+        if (respStatus == "UNAUTHORIZED") {
             const bool firstAuthFail = !m_authFailed;
             m_authFailed = true;
             m_teamserverOnline = false;
@@ -3818,6 +4165,19 @@ private:
             return false;
         }
         m_authFailed = false;
+
+        if (respStatus == "VAULT_LOCKED") {
+            m_vaultLocked = true;
+            m_teamserverOnline = true;
+            updateTelemetryEnvironment(respOut.value("data").toObject());
+            updateListenersTable();
+            const QString errMsg = respOut.value("error").toString("Shuna vault is locked");
+            if (!background) {
+                appendEventLog("WARN", "#f1fa8c", "Shuna vault locked: " + htmlEsc(errMsg));
+                appendTaskWarn("Shuna vault is locked (" + errMsg + "). Run 'unlock <passphrase>' in Operative Console.");
+            }
+            return false;
+        }
 
         const bool wasOffline = !m_teamserverOnline;
         m_teamserverOnline = true;
@@ -3982,6 +4342,8 @@ private:
     QString m_serverAddr;
     QString m_authToken;
     QString m_tokenFilePath;
+    QString m_pkiDir;
+    bool m_allowClassicalTlsFallback = false;
     QString m_localUser;
     QString m_localUid;
     QString m_localHost;
@@ -3996,6 +4358,16 @@ private:
     QString m_committedKrb5Conf;
     QString m_committedKcmSocket;
     QString m_lastExplicitTanukiSubcmd = "doctor";
+    QString m_pqcGroup = "X25519MLKEM768";
+    QString m_sslMode = "standalone";
+    QString m_tokenExpiresAt;
+    QString m_clientCertSerial;
+    QString m_hostId;
+    int m_shunaKeyVersion = 0;
+    bool m_dbConnected = false;
+    bool m_vaultLocked = false;
+    bool m_rotationInProgress = false;
+    bool m_profileLoadedFromDb = false;
     bool m_kinitAvailable = false;
     bool m_actionInFlight = false;
     bool m_teamserverOnline = false;
@@ -4080,6 +4452,8 @@ int main(int argc, char **argv) {
     const QCommandLineOption addrOpt("addr", "Teamserver address (host:port)", "addr", "127.0.0.1:40056");
     const QCommandLineOption tokenOpt("token", "Teamserver RPC auth token", "token");
     const QCommandLineOption tokenFileOpt("token-file", "Path to teamserver 0600 auth token file", "path");
+    const QCommandLineOption pkiDirOpt("pki-dir", "PKI directory containing ca.crt, client.crt, client.key", "path");
+    const QCommandLineOption allowClassicalOpt("allow-classical-tls-fallback", "Allow X25519 fallback alongside X25519MLKEM768");
     const QCommandLineOption selfTestOpt("self-test", "Run automated desktop RPC verification and exit");
     const QCommandLineOption shotOpt("screenshot", "Save PNG screenshot of Sessions Table view", "path");
     const QCommandLineOption graphShotOpt("graph-screenshot", "Save PNG screenshot of Session Graph view", "path");
@@ -4088,6 +4462,8 @@ int main(int argc, char **argv) {
     parser.addOption(addrOpt);
     parser.addOption(tokenOpt);
     parser.addOption(tokenFileOpt);
+    parser.addOption(pkiDirOpt);
+    parser.addOption(allowClassicalOpt);
     parser.addOption(selfTestOpt);
     parser.addOption(shotOpt);
     parser.addOption(graphShotOpt);
@@ -4095,7 +4471,12 @@ int main(int argc, char **argv) {
     parser.addOption(consoleShotOpt);
     parser.process(app);
 
-    CielWindow win(parser.value(addrOpt), parser.value(tokenOpt), parser.value(tokenFileOpt));
+    CielWindow win(
+        parser.value(addrOpt),
+        parser.value(tokenOpt),
+        parser.value(tokenFileOpt),
+        parser.value(pkiDirOpt),
+        parser.isSet(allowClassicalOpt));
     if (!appIcon.isNull()) {
         win.setWindowIcon(appIcon);
     }

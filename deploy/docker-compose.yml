@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ciel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ciel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD before starting}
+      POSTGRES_DB: ${POSTGRES_DB:-ciel}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ciel_pgdata:/var/lib/postgresql/data
+      - ${CIEL_PKI_DIR:-./pki}:/etc/postgresql/pki:ro
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /run/postgresql-ssl
+        cp /etc/postgresql/pki/ca.crt /etc/postgresql/pki/pg-server.crt /etc/postgresql/pki/pg-server.key /run/postgresql-ssl/
+        chown -R postgres:postgres /run/postgresql-ssl
+        chmod 644 /run/postgresql-ssl/ca.crt /run/postgresql-ssl/pg-server.crt
+        chmod 600 /run/postgresql-ssl/pg-server.key
+        exec docker-entrypoint.sh "$$@"
+      - --
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/postgresql-ssl/pg-server.crt
+      - -c
+      - ssl_key_file=/run/postgresql-ssl/pg-server.key
+      - -c
+      - ssl_ca_file=/run/postgresql-ssl/ca.crt
+      - -c
+      - ssl_min_protocol_version=TLSv1.3
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ciel} -d ${POSTGRES_DB:-ciel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ciel_pgdata:

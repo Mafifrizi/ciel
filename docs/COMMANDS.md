@@ -5,12 +5,22 @@ Run commands directly inside `Operative Console` (Tab autocomplete enabled), or 
 ## Target Configuration & Workspace Navigation
 
 - `set` : Display active CCACHE, keytab, `krb5.conf`, and KCM socket targets (either custom override or `auto:` host-discovered).
-- `set <ccache|keytab|krb5conf|kcm> <path>` : Override a target path (mirrors **Field Target Paths** in `Listeners`).
+- `set <ccache|keytab|krb5conf|kcm> <path>` : Override a target path (mirrors **Field Target Paths** in `Listeners`, and auto-saves via `profile_save` when PostgreSQL is connected and unlocked).
 - `set clear` : Clear all custom overrides and revert to host auto-discovery.
-- `sync` : Run an immediate `full_sync` across `OP-01`..`OP-04` and `OP-06` (`doctor`), resetting `OP-06` back to host health view.
+- `sync` : Run an immediate `full_sync` across `OP-01`..`OP-04` and `OP-06` (`doctor`), persisting encrypted snapshots and diff audit events when PostgreSQL is connected and unlocked.
 - `audit` : Print an aligned summary matrix of all recorded operative snapshots in the console.
 - `graph` / `table` : Switch the top-left pane between `Session Graph` and `Sessions`.
 - `clear` / `help` : Clear console output or print the inline command summary.
+
+## Fleet Database, Shuna Vault & mTLS Commands
+
+- `hosts` : Query and decrypt active fleet hosts from PostgreSQL (`hosts.host_meta_enc`).
+- `history [operative_id|host_id] [limit]` : Query and decrypt `audit_events` and `telemetry_snapshots` from PostgreSQL while verifying row-bound AAD.
+- `unlock [passphrase]` : Unlock the Shuna vault via rate-limited Argon2id (`vault_unlock`). Prompts securely if passphrase is omitted.
+- `rotate [new_passphrase]` : Trigger dual-key online DEK rotation and batched background re-encryption (`LIMIT 1000 FOR UPDATE SKIP LOCKED`) across all encrypted tables.
+- `backup [out_path]` : Stream `pg_dump` through `shuna.SealStream` (`SHUNAS1` chunked XChaCha20-Poly1305) to a `0600` backup archive.
+- `token_rotate` : Rotate the mTLS-cert-bound 256-bit session `auth_token` (30s grace overlap on previous token).
+- `cert_revoke <serial_hex> [reason]` : Revoke an mTLS client certificate in `ca.crl` + `revoked_certs`, invalidate its session tokens, and immediately terminate active sockets matching that serial.
 
 ## Tempest Runtime Commands (`OP-01` through `OP-05`)
 

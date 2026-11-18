@@ -1,12 +1,14 @@
 TEMPEST_REPO ?= https://github.com/Mafifrizi/tempest.git
 TANUKI_REPO  ?= https://github.com/Mafifrizi/tanuki.git
+SHUNA_REPO   ?= https://github.com/Mafifrizi/shuna.git
 
 TEMPEST_DIR  ?= $(abspath ../tempest)
+SHUNA_DIR    ?= $(abspath ../shuna)
 TANUKI_DIR   := $(shell if [ -d ../tanuki ]; then (cd ../tanuki && pwd); elif [ -d ../tanuki-repo ]; then (cd ../tanuki-repo && pwd); else echo "$(abspath ../tanuki)"; fi)
 TANUKI_MODE  ?= python
 PREFIX       ?= $(HOME)/.local
 
-.PHONY: all deps install clean test
+.PHONY: all deps install clean test test-go
 
 all: deps bin/ciel-teamserver bin/ciel-client
 
@@ -20,6 +22,13 @@ deps: | bin
 	fi
 	$(MAKE) -C "$(TEMPEST_DIR)"
 	cp -f "$(TEMPEST_DIR)/bin/souei" "$(TEMPEST_DIR)/bin/chronoa" "$(TEMPEST_DIR)/bin/ranga" "$(TEMPEST_DIR)/bin/libranga.so" bin/
+	@if [ ! -f "$(SHUNA_DIR)/go.mod" ]; then \
+		echo "[deps] Cloning Shuna from $(SHUNA_REPO) into $(SHUNA_DIR)..."; \
+		git clone --depth 1 "$(SHUNA_REPO)" "$(SHUNA_DIR)"; \
+	fi
+	$(MAKE) -C "$(SHUNA_DIR)" build
+	cp -f "$(SHUNA_DIR)/bin/shuna" bin/shuna
+	chmod +x bin/shuna
 	@if [ ! -f "$(TANUKI_DIR)/pyproject.toml" ]; then \
 		echo "[deps] Cloning Tanuki from $(TANUKI_REPO) into $(TANUKI_DIR)..."; \
 		git clone --depth 1 "$(TANUKI_REPO)" "$(TANUKI_DIR)"; \
@@ -35,7 +44,7 @@ deps: | bin
 	fi
 	chmod +x bin/tanuki
 
-bin/ciel-teamserver: teamserver/main.go teamserver/workspace_unix.go teamserver/workspace_windows.go teamserver/go.mod | bin
+bin/ciel-teamserver: teamserver/*.go teamserver/migrations/*.sql teamserver/go.mod | bin
 	cd teamserver && go build -o ../bin/ciel-teamserver .
 
 bin/ciel-client: client/CMakeLists.txt client/src/main.cpp | bin
@@ -46,10 +55,13 @@ bin/ciel-client: client/CMakeLists.txt client/src/main.cpp | bin
 
 install: all
 	mkdir -p "$(PREFIX)/bin"
-	cp -f bin/ciel bin/ciel-teamserver bin/ciel-client bin/souei bin/chronoa bin/ranga bin/libranga.so bin/tanuki "$(PREFIX)/bin/"
-	@echo "[install] Installed Ciel, Tempest (souei, chronoa, ranga, libranga.so), and Tanuki into $(PREFIX)/bin"
+	cp -f bin/ciel bin/ciel-teamserver bin/ciel-client bin/shuna bin/souei bin/chronoa bin/ranga bin/libranga.so bin/tanuki "$(PREFIX)/bin/"
+	@echo "[install] Installed Ciel, Shuna, Tempest (souei, chronoa, ranga, libranga.so), and Tanuki into $(PREFIX)/bin"
 
-test: all
+test-go:
+	cd teamserver && go test -race -count=1 -v ./...
+
+test: all test-go
 	python3 tests/test_ciel.py
 
 clean:
