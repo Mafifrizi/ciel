@@ -2,7 +2,6 @@
 <br>
 <img src="assets/ciel_logo.jpg" width="160">
 <br>
-Ciel
 </h1>
 
 <p align="center">
