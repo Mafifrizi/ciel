@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/binary"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,7 +15,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,26 +27,54 @@ import (
 
 const defaultTempestDir = "../tempest/bin"
 
-const (
-	demoPacHex    = "02000000000000000a0000001a000000280000000000000001000000f800000048000000000000000000000000a0d90110006300690065006c005f006f007000730000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010001200040002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f40100000102000002000000080002000002000000000000000000000000000000000000000000000000000010000200000000000000000000020000100002000000000000000000000000000800000000000000080000006300690065006c005f006f0070007300020000000102000007000000000200000700000004010000000000051500000057040000ae080000050d0000"
-	demoShadowHex = "0002000048000345434b3120000000111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222222000011af8f9468674edde04d2975d3cc39345c5c7bf7ee0338e508955b7462d318ae2010004010100050010000611223344556677889900aabbccddeeff020007010108000900206196bdc5db01"
-)
+var allowedTanukiSubcmds = map[string]bool{
+	"doctor": true,
+	"fix":    true,
+	"keytab": true,
+	"config": true,
+	"triage": true,
+	"ladder": true,
+	"nhi":    true,
+	"token":  true,
+	"blast":  true,
+	"adcs":   true,
+	"pac":    true,
+	"shadow": true,
+	"kcm":    true,
+	"auth":   true,
+	"tgs":    true,
+	"ldap":   true,
+	"purge":  true,
+	"skill":  true,
+}
+
+var systemKcmSocketCandidates = []string{
+	"/run/.heim_org.h5l.kcm-socket",
+	"/var/run/.heim_org.h5l.kcm-socket",
+	"/var/run/sssd-kcm.socket",
+	"/run/sssd-kcm.socket",
+	"/var/lib/sss/pipes/kcm",
+}
 
 type Request struct {
-	Action        string   `json:"action"`
-	CcachePath    string   `json:"ccache_path,omitempty"`
-	SkewSec       int64    `json:"skew_sec,omitempty"`
-	WarnWindowSec int64    `json:"warn_window_sec,omitempty"`
-	Renew         bool     `json:"renew,omitempty"`
-	WeakEnctype   bool     `json:"weak_enctype,omitempty"`
-	ExpiredTicket bool     `json:"expired_ticket,omitempty"`
-	WatchInotify  bool     `json:"watch_inotify,omitempty"`
-	IsolateMode   string   `json:"isolate_mode,omitempty"`
-	PurgePath     string   `json:"purge_path,omitempty"`
-	RevokeSession bool     `json:"revoke_session,omitempty"`
-	Subcommand    string   `json:"subcommand,omitempty"`
-	TargetArg     string   `json:"target_arg,omitempty"`
-	Args          []string `json:"args,omitempty"`
+	AuthToken      string   `json:"auth_token,omitempty"`
+	Action         string   `json:"action"`
+	CcachePath     string   `json:"ccache_path,omitempty"`
+	KeytabPath     string   `json:"keytab_path,omitempty"`
+	Krb5ConfPath   string   `json:"krb5_conf_path,omitempty"`
+	KcmSocket      string   `json:"kcm_socket,omitempty"`
+	WatchPath      string   `json:"watch_path,omitempty"`
+	WatchTimeoutMs int      `json:"watch_timeout_ms,omitempty"`
+	KdcTimeEpoch   int64    `json:"kdc_time_epoch,omitempty"`
+	WarnWindowSec  int64    `json:"warn_window_sec,omitempty"`
+	Renew          bool     `json:"renew,omitempty"`
+	WatchInotify   bool     `json:"watch_inotify,omitempty"`
+	IsolateMode    string   `json:"isolate_mode,omitempty"`
+	PurgePath      string   `json:"purge_path,omitempty"`
+	RevokeSession  bool     `json:"revoke_session,omitempty"`
+	Subcommand     string   `json:"subcommand,omitempty"`
+	TargetArg      string   `json:"target_arg,omitempty"`
+	Args           []string `json:"args,omitempty"`
 }
 
 type Row struct {
@@ -77,212 +108,231 @@ type Server struct {
 	workDir     string
 	selfExe     string
 	kcmSockPath string
+	authToken   string
+	tokenFile   string
+	connSem     chan struct{}
 	mu          sync.Mutex
 }
 
-func packPrincipal(comps []string, realm string, nameType uint32) []byte {
-	var b bytes.Buffer
-	rb := []byte(realm)
-	_ = binary.Write(&b, binary.BigEndian, nameType)
-	_ = binary.Write(&b, binary.BigEndian, uint32(len(comps)))
-	_ = binary.Write(&b, binary.BigEndian, uint32(len(rb)))
-	b.Write(rb)
-	for _, c := range comps {
-		cb := []byte(c)
-		_ = binary.Write(&b, binary.BigEndian, uint32(len(cb)))
-		b.Write(cb)
+func validateCleanArg(s string, allowLeadingDash bool) error {
+	if s == "" {
+		return errors.New("value is empty")
 	}
-	return b.Bytes()
-}
-
-func writeDemoCCache(path string, ttlSec int64, enctype uint16) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	if !allowLeadingDash && strings.HasPrefix(s, "-") {
+		return errors.New("value must not begin with '-'")
 	}
-	now := time.Now().Unix()
-	auth := uint32(now - 120)
-	start := uint32(now - 120)
-	end := uint32(now + ttlSec)
-	renewTill := uint32(now + 86400)
-
-	var out bytes.Buffer
-	_ = binary.Write(&out, binary.BigEndian, uint16(0x0504))
-	_ = binary.Write(&out, binary.BigEndian, uint16(0))
-
-	clientP := packPrincipal([]string{"ciel"}, "TEMPEST.LOCAL", 1)
-	serverP := packPrincipal([]string{"krbtgt", "TEMPEST.LOCAL"}, "TEMPEST.LOCAL", 2)
-	out.Write(clientP)
-	out.Write(clientP)
-	out.Write(serverP)
-
-	key := bytes.Repeat([]byte{0xAA}, 16)
-	_ = binary.Write(&out, binary.BigEndian, enctype)
-	_ = binary.Write(&out, binary.BigEndian, uint32(len(key)))
-	out.Write(key)
-
-	_ = binary.Write(&out, binary.BigEndian, auth)
-	_ = binary.Write(&out, binary.BigEndian, start)
-	_ = binary.Write(&out, binary.BigEndian, end)
-	_ = binary.Write(&out, binary.BigEndian, renewTill)
-
-	out.WriteByte(0)
-	_ = binary.Write(&out, binary.BigEndian, uint32(0x40E10000))
-	_ = binary.Write(&out, binary.BigEndian, uint32(0))
-	_ = binary.Write(&out, binary.BigEndian, uint32(0))
-
-	tkt := bytes.Repeat([]byte{0x55}, 32)
-	_ = binary.Write(&out, binary.BigEndian, uint32(len(tkt)))
-	out.Write(tkt)
-	_ = binary.Write(&out, binary.BigEndian, uint32(0))
-
-	return os.WriteFile(path, out.Bytes(), 0o600)
-}
-
-func writeDemoSecretFile(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	buf := make([]byte, 4096)
-	_, _ = rand.Read(buf)
-	return os.WriteFile(path, buf, 0o600)
-}
-
-func writeDemoKeytab(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	var entry bytes.Buffer
-	realm := []byte("TEMPEST.LOCAL")
-	comp := []byte("ciel")
-	key := bytes.Repeat([]byte{0x2A}, 32)
-	_ = binary.Write(&entry, binary.BigEndian, int16(1))
-	_ = binary.Write(&entry, binary.BigEndian, uint16(len(realm)))
-	entry.Write(realm)
-	_ = binary.Write(&entry, binary.BigEndian, uint16(len(comp)))
-	entry.Write(comp)
-	_ = binary.Write(&entry, binary.BigEndian, uint32(1))
-	_ = binary.Write(&entry, binary.BigEndian, uint32(time.Now().Unix()))
-	entry.WriteByte(3)
-	_ = binary.Write(&entry, binary.BigEndian, int16(18))
-	_ = binary.Write(&entry, binary.BigEndian, uint16(len(key)))
-	entry.Write(key)
-	_ = binary.Write(&entry, binary.BigEndian, uint32(3))
-
-	var kt bytes.Buffer
-	kt.Write([]byte{0x05, 0x02})
-	_ = binary.Write(&kt, binary.BigEndian, int32(entry.Len()))
-	kt.Write(entry.Bytes())
-	return os.WriteFile(path, kt.Bytes(), 0o600)
-}
-
-func writeDemoAdcsTemplates(path string) error {
-	payload := `{"templates":[{"name":"CielSubCA-ESC1","msPKI-Certificate-Name-Flag":1,"msPKI-Enrollment-Flag":0,"pKIExtendedKeyUsage":["1.3.6.1.5.5.7.3.2"],"authorized_signatures":0}]}`
-	return os.WriteFile(path, []byte(payload), 0o600)
-}
-
-func writeDemoJwt(path string) error {
-	jwt := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzcGlmZmU6Ly90ZW1wZXN0LmxvY2FsL3dvcmtsb2FkL2NpZWwiLCJpc3MiOiJodHRwczovL3N0cy50ZW1wZXN0LmxvY2FsIiwiYXVkIjoiY2llbC10ZWFtc2VydmVyIiwic2NvcGUiOiJ0YW51a2kudG9rZW4gcmVhZCIsImV4cCI6MTk5OTk5OTk5OX0.c2lnbmF0dXJl"
-	return os.WriteFile(path, []byte(jwt), 0o600)
-}
-
-func (s *Server) defaultCCachePath() string {
-	return filepath.Join(s.workDir, "krb5cc_ciel")
-}
-
-func (s *Server) defaultPurgePath() string {
-	return filepath.Join(s.workDir, "PurgeTarget.keytab")
-}
-
-func (s *Server) defaultKeytabPath() string {
-	return filepath.Join(s.workDir, "service.keytab")
-}
-
-func (s *Server) defaultAdcsPath() string {
-	return filepath.Join(s.workDir, "adcs_templates.json")
-}
-
-func (s *Server) defaultPacPath() string {
-	return filepath.Join(s.workDir, "demo.pac")
-}
-
-func (s *Server) defaultJwtPath() string {
-	return filepath.Join(s.workDir, "workload_token.jwt")
-}
-
-func (s *Server) ensureWorkspaceArtifacts() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.workDir, 0o700); err != nil {
-		return err
-	}
-	cc := s.defaultCCachePath()
-	if _, err := os.Stat(cc); os.IsNotExist(err) {
-		if err := writeDemoCCache(cc, 3600, 18); err != nil {
-			return err
-		}
-	}
-	pt := s.defaultPurgePath()
-	if _, err := os.Stat(pt); os.IsNotExist(err) {
-		if err := writeDemoSecretFile(pt); err != nil {
-			return err
-		}
-	}
-	kt := s.defaultKeytabPath()
-	if _, err := os.Stat(kt); os.IsNotExist(err) {
-		if err := writeDemoKeytab(kt); err != nil {
-			return err
-		}
-	}
-	adcs := s.defaultAdcsPath()
-	if _, err := os.Stat(adcs); os.IsNotExist(err) {
-		if err := writeDemoAdcsTemplates(adcs); err != nil {
-			return err
-		}
-	}
-	jwt := s.defaultJwtPath()
-	if _, err := os.Stat(jwt); os.IsNotExist(err) {
-		if err := writeDemoJwt(jwt); err != nil {
-			return err
-		}
-	}
-	pac := s.defaultPacPath()
-	if _, err := os.Stat(pac); os.IsNotExist(err) {
-		rawPac, err := hex.DecodeString(demoPacHex)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(pac, rawPac, 0o600); err != nil {
-			return err
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			return fmt.Errorf("value contains control character 0x%02x", c)
 		}
 	}
 	return nil
 }
 
-func (s *Server) startKcmSocket() (net.Listener, error) {
-	sockPath := filepath.Join(s.workDir, "kcm.sock")
-	_ = os.Remove(sockPath)
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		return nil, err
+func validatePathInput(p string) error {
+	if err := validateCleanArg(p, false); err != nil {
+		return err
 	}
-	if err := os.Chmod(sockPath, 0o600); err != nil {
-		_ = ln.Close()
-		return nil, err
+	if strings.ContainsRune(p, 0) {
+		return errors.New("path contains NUL byte")
 	}
-	s.kcmSockPath = sockPath
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(conn net.Conn) {
-				time.Sleep(30 * time.Millisecond)
-				_ = conn.Close()
-			}(c)
+	return nil
+}
+
+func validatePurgeTarget(p string) error {
+	if err := validatePathInput(p); err != nil {
+		return err
+	}
+	cleaned := filepath.Clean(p)
+	protected := map[string]bool{
+		"/":            true,
+		"/bin":         true,
+		"/boot":        true,
+		"/dev":         true,
+		"/etc":         true,
+		"/etc/group":   true,
+		"/etc/gshadow": true,
+		"/etc/passwd":  true,
+		"/etc/shadow":  true,
+		"/etc/sudoers": true,
+		"/home":        true,
+		"/lib":         true,
+		"/lib64":       true,
+		"/proc":        true,
+		"/root":        true,
+		"/run":         true,
+		"/sbin":        true,
+		"/sys":         true,
+		"/usr":         true,
+		"/var":         true,
+	}
+	if protected[cleaned] {
+		return fmt.Errorf("refusing to purge protected system path: %s", cleaned)
+	}
+	protectedPrefixes := []string{
+		"/bin/", "/boot/", "/dev/", "/lib/", "/lib64/",
+		"/proc/", "/sbin/", "/sys/", "/usr/",
+	}
+	for _, pref := range protectedPrefixes {
+		if strings.HasPrefix(cleaned, pref) {
+			return fmt.Errorf("refusing to purge protected system path: %s", cleaned)
 		}
-	}()
-	return ln, nil
+	}
+	return nil
+}
+
+func splitQuotedArgs(line string) ([]string, error) {
+	var out []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+	hasToken := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			cur.WriteByte(ch)
+			escaped = false
+			hasToken = true
+			continue
+		}
+		if ch == '\\' && !inSingle {
+			escaped = true
+			hasToken = true
+			continue
+		}
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			hasToken = true
+			continue
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			hasToken = true
+			continue
+		}
+		if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') && !inSingle && !inDouble {
+			if hasToken {
+				out = append(out, cur.String())
+				cur.Reset()
+				hasToken = false
+			}
+			continue
+		}
+		cur.WriteByte(ch)
+		hasToken = true
+	}
+	if escaped || inSingle || inDouble {
+		return nil, errors.New("unterminated quote or escape in argument string")
+	}
+	if hasToken {
+		out = append(out, cur.String())
+	}
+	return out, nil
+}
+
+func validateTanukiArgs(args []string) error {
+	for i, a := range args {
+		if err := validateCleanArg(a, true); err != nil {
+			return fmt.Errorf("invalid argument at index %d: %w", i, err)
+		}
+		if a == "--interactive" {
+			return errors.New("interactive TUI mode is not supported over RPC")
+		}
+		if a == "-i" && (i+1 >= len(args) || strings.HasPrefix(args[i+1], "-")) {
+			return errors.New("interactive -i flag is not supported over RPC")
+		}
+	}
+	return nil
+}
+
+func (s *Server) resolveKcmSocket(explicit string) string {
+	cand := strings.TrimSpace(explicit)
+	if cand == "" {
+		cand = strings.TrimSpace(s.kcmSockPath)
+	}
+	if cand != "" {
+		return cand
+	}
+	for _, p := range systemKcmSocketCandidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func parseCCacheSpec(raw string) (string, string, error) {
+	cand := strings.TrimSpace(raw)
+	if strings.HasPrefix(cand, "FILE:") {
+		p := strings.TrimPrefix(cand, "FILE:")
+		if err := validatePathInput(p); err != nil {
+			return "", "", err
+		}
+		return p, "FILE", nil
+	}
+	if strings.HasPrefix(cand, "/") {
+		if err := validatePathInput(cand); err != nil {
+			return "", "", err
+		}
+		return cand, "FILE", nil
+	}
+	if idx := strings.IndexByte(cand, ':'); idx > 0 {
+		scheme := strings.ToUpper(cand[:idx])
+		if err := validateCleanArg(cand, false); err != nil {
+			return "", "", err
+		}
+		return cand, scheme, nil
+	}
+	if err := validatePathInput(cand); err != nil {
+		return "", "", err
+	}
+	return cand, "FILE", nil
+}
+
+func resolveCCachePath(explicit string) (string, string, error) {
+	if cand := strings.TrimSpace(explicit); cand != "" {
+		return parseCCacheSpec(cand)
+	}
+	if env := strings.TrimSpace(os.Getenv("KRB5CCNAME")); env != "" {
+		return parseCCacheSpec(env)
+	}
+	return fmt.Sprintf("/tmp/krb5cc_%d", os.Getuid()), "FILE", nil
+}
+
+func resolveKrb5ConfPath(explicit string) string {
+	if c := strings.TrimSpace(explicit); c != "" {
+		return c
+	}
+	if env := strings.TrimSpace(os.Getenv("KRB5_CONFIG")); env != "" {
+		return env
+	}
+	return "/etc/krb5.conf"
+}
+
+func resolveKeytabPath(explicit string) string {
+	if k := strings.TrimSpace(explicit); k != "" {
+		return k
+	}
+	if env := strings.TrimSpace(os.Getenv("KRB5_KTNAME")); env != "" {
+		return strings.TrimPrefix(env, "FILE:")
+	}
+	return "/etc/krb5.keytab"
+}
+
+func sanitizedChildEnv(extraEnv ...string) []string {
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(extraEnv))
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "CIEL_AUTH_TOKEN=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, extraEnv...)
+	return out
 }
 
 func (s *Server) runJSONProcess(binPath string, extraEnv []string, args ...string) (map[string]any, int, string, error) {
@@ -293,9 +343,7 @@ func (s *Server) runJSONProcess(binPath string, extraEnv []string, args ...strin
 	if s.workDir != "" {
 		cmd.Dir = s.workDir
 	}
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	cmd.Env = sanitizedChildEnv(extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -348,8 +396,26 @@ func intField(m map[string]any, key string) int64 {
 	if m == nil {
 		return 0
 	}
-	if v, ok := m[key].(float64); ok {
+	switch v := m[key].(type) {
+	case float64:
 		return int64(v)
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case int32:
+		return int64(v)
+	case uint:
+		return int64(v)
+	case uint64:
+		return int64(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n
+		}
+		if f, err := v.Float64(); err == nil {
+			return int64(f)
+		}
 	}
 	return 0
 }
@@ -378,49 +444,65 @@ func errRow(id, op, mod, target string, rc int, err error) Row {
 	}
 }
 
-func (s *Server) execSoueiProbe(watchInotify bool) (Row, map[string]any, int, string) {
+func (s *Server) execSoueiProbe(req Request, watchInotify bool) (Row, map[string]any, int, string) {
 	args := []string{"--probe"}
-	if s.kcmSockPath != "" {
-		args = append(args, "--kcm-socket", s.kcmSockPath)
-	}
-	var doneTrigger chan struct{}
-	if watchInotify {
-		cc := s.defaultCCachePath()
-		s.mu.Lock()
-		if _, err := os.Stat(cc); os.IsNotExist(err) {
-			_ = writeDemoCCache(cc, 3600, 18)
+	kcmSock := s.resolveKcmSocket(req.KcmSocket)
+	if kcmSock != "" {
+		if err := validatePathInput(kcmSock); err != nil {
+			return errRow("OP-01", "Souei", "keyring-probe", kcmSock, 1, err),
+				nil, 1, fmt.Sprintf("[SOUEI] invalid kcm_socket: %v", err)
 		}
-		s.mu.Unlock()
-		args = append(args, "--watch-file", cc, "--timeout-ms", "300")
-		doneTrigger = make(chan struct{})
-		go func() {
-			defer close(doneTrigger)
-			time.Sleep(60 * time.Millisecond)
-			_, _ = os.ReadFile(cc)
-		}()
+		args = append(args, "--kcm-socket", kcmSock)
 	}
-	args = append(args, "--json")
-	data, exitCode, stderrStr, err := s.runBinaryJSON("souei", nil, args...)
-	if doneTrigger != nil {
-		<-doneTrigger
-	}
+
 	modName := "keyring-probe"
 	if watchInotify {
 		modName = "inotify-watch"
+		watchTarget := strings.TrimSpace(req.WatchPath)
+		if watchTarget == "" {
+			ccPath, scheme, err := resolveCCachePath(req.CcachePath)
+			if err == nil && scheme == "FILE" {
+				watchTarget = ccPath
+			}
+		}
+		if watchTarget == "" {
+			err := errors.New("watch_path is required when no FILE ccache path is available")
+			return errRow("OP-01", "Souei", modName, "-", 1, err),
+				nil, 1, fmt.Sprintf("[SOUEI] %v", err)
+		}
+		if err := validatePathInput(watchTarget); err != nil {
+			return errRow("OP-01", "Souei", modName, watchTarget, 1, err),
+				nil, 1, fmt.Sprintf("[SOUEI] invalid watch_path: %v", err)
+		}
+		timeoutMs := req.WatchTimeoutMs
+		if timeoutMs <= 0 {
+			timeoutMs = 500
+		} else if timeoutMs < 100 {
+			timeoutMs = 100
+		} else if timeoutMs > 10000 {
+			timeoutMs = 10000
+		}
+		args = append(args, "--watch-file", watchTarget, "--timeout-ms", strconv.Itoa(timeoutMs))
 	}
+
+	args = append(args, "--json")
+	data, exitCode, stderrStr, err := s.runBinaryJSON("souei", nil, args...)
 	if err != nil {
 		return errRow("OP-01", "Souei", modName, "/proc/keys", exitCode, err),
 			nil, exitCode, fmt.Sprintf("[SOUEI] error executing souei: %v (%s)", err, stderrStr)
 	}
+
 	sessID := intField(data, "session_keyring_id")
 	permHex := strField(data, "session_perm_hex")
 	iso := boolField(data, "isolated_session_keyring")
 	entries := intField(data, "keyring_entries_count")
 	status := strField(data, "status")
 
+	kcmChecked := false
 	kcmConn := false
 	var peerPid int64
 	if kcm, ok := data["kcm_socket"].(map[string]any); ok && kcm != nil {
+		kcmChecked = boolField(kcm, "checked")
 		kcmConn = boolField(kcm, "connected")
 		peerPid = intField(kcm, "peer_pid")
 	}
@@ -431,11 +513,21 @@ func (s *Server) execSoueiProbe(watchInotify bool) (Row, map[string]any, int, st
 		}
 	}
 
-	detail := fmt.Sprintf("keyring=%d isolated=%v kcm=%v", sessID, iso, kcmConn)
-	aux := fmt.Sprintf("keys=%d kcm_pid=%d", entries, peerPid)
+	kcmLabel := "none"
+	if kcmChecked {
+		kcmLabel = fmt.Sprintf("%v", kcmConn)
+	}
+	detail := fmt.Sprintf("keyring=%d isolated=%v kcm=%s", sessID, iso, kcmLabel)
+	aux := fmt.Sprintf("keys=%d", entries)
+	if kcmChecked {
+		aux = fmt.Sprintf("keys=%d kcm_pid=%d", entries, peerPid)
+	}
 	if watchInotify {
-		detail = fmt.Sprintf("inotify_events=%d kcm=%v", inoCount, kcmConn)
-		aux = fmt.Sprintf("ino=%d kcm_pid=%d", inoCount, peerPid)
+		detail = fmt.Sprintf("inotify_events=%d kcm=%s", inoCount, kcmLabel)
+		aux = fmt.Sprintf("ino=%d", inoCount)
+		if kcmChecked {
+			aux = fmt.Sprintf("ino=%d kcm_pid=%d", inoCount, peerPid)
+		}
 	}
 
 	row := Row{
@@ -450,62 +542,125 @@ func (s *Server) execSoueiProbe(watchInotify bool) (Row, map[string]any, int, st
 		Status:    status,
 		RawJSON:   data,
 	}
-	logLine := fmt.Sprintf("[SOUEI] status=%s exit=%d session_keyring=%d perm=0x%s entries=%d kcm_connected=%v peer_pid=%d inotify_events=%d",
-		status, exitCode, sessID, permHex, entries, kcmConn, peerPid, inoCount)
+	logLine := fmt.Sprintf("[SOUEI] status=%s exit=%d session_keyring=%d perm=0x%s entries=%d kcm=%s peer_pid=%d inotify_events=%d",
+		status, exitCode, sessID, permHex, entries, kcmLabel, peerPid, inoCount)
 	return row, data, exitCode, logLine
 }
 
-func (s *Server) execChronoaCheck(req Request) (Row, map[string]any, int, string) {
-	ccPath := req.CcachePath
-	if ccPath == "" {
-		ccPath = s.defaultCCachePath()
+func runKinitRenew(ccPath, scheme, krb5Conf string) (int, string, error) {
+	kinitBin, err := exec.LookPath("kinit")
+	if err != nil {
+		return 3, "", errors.New("kinit binary not found on PATH (install krb5-user)")
 	}
-	if req.WeakEnctype {
-		rc4Path := filepath.Join(s.workDir, "krb5cc_rc4")
-		s.mu.Lock()
-		_ = writeDemoCCache(rc4Path, 3600, 23)
-		s.mu.Unlock()
-		ccPath = rc4Path
-	} else if req.ExpiredTicket {
-		expPath := filepath.Join(s.workDir, "krb5cc_expired")
-		s.mu.Lock()
-		_ = writeDemoCCache(expPath, -60, 18)
-		s.mu.Unlock()
-		ccPath = expPath
-	} else if ccPath == s.defaultCCachePath() {
-		s.mu.Lock()
-		if _, err := os.Stat(ccPath); os.IsNotExist(err) {
-			_ = writeDemoCCache(ccPath, 3600, 18)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, kinitBin, "-R")
+	ccVal := ccPath
+	if scheme == "FILE" && !strings.HasPrefix(ccVal, "FILE:") {
+		ccVal = "FILE:" + ccPath
+	}
+	extraEnv := []string{"KRB5CCNAME=" + ccVal}
+	if strings.TrimSpace(krb5Conf) != "" {
+		extraEnv = append(extraEnv, "KRB5_CONFIG="+strings.TrimSpace(krb5Conf))
+	}
+	cmd.Env = sanitizedChildEnv(extraEnv...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+	if runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			return ee.ExitCode(), strings.TrimSpace(stderr.String()), runErr
 		}
-		s.mu.Unlock()
+		return -1, strings.TrimSpace(stderr.String()), runErr
+	}
+	return 0, strings.TrimSpace(stderr.String()), nil
+}
+
+func (s *Server) execChronoaCheck(req Request) (Row, map[string]any, int, string) {
+	ccPath, scheme, err := resolveCCachePath(req.CcachePath)
+	if err != nil {
+		return errRow("OP-02", "Chronoa", "ccache-watchdog", req.CcachePath, 1, err),
+			nil, 1, fmt.Sprintf("[CHRONOA] invalid ccache_path: %v", err)
 	}
 
-	nowEpoch := time.Now().Unix()
+	var krb5Conf string
+	if strings.TrimSpace(req.Krb5ConfPath) != "" {
+		if err := validatePathInput(strings.TrimSpace(req.Krb5ConfPath)); err != nil {
+			return errRow("OP-02", "Chronoa", "ccache-watchdog", req.Krb5ConfPath, 1, err),
+				nil, 1, fmt.Sprintf("[CHRONOA] invalid krb5_conf_path: %v", err)
+		}
+		krb5Conf = strings.TrimSpace(req.Krb5ConfPath)
+	}
+
+	renewAttempted := false
+	renewExit := -1
+	renewErrMsg := ""
+	renewed := false
+	if req.Renew {
+		renewAttempted = true
+		rc, rStderr, rErr := runKinitRenew(ccPath, scheme, krb5Conf)
+		renewExit = rc
+		if rErr != nil {
+			if rStderr != "" {
+				renewErrMsg = rStderr
+			} else {
+				renewErrMsg = rErr.Error()
+			}
+		} else {
+			renewed = true
+		}
+	}
+
 	warnWin := req.WarnWindowSec
 	if warnWin <= 0 {
 		warnWin = 300
 	}
-	if req.Renew && warnWin < 86400 {
-		warnWin = 86400
-	}
 
-	args := []string{
-		"--ccache", ccPath,
-		"--now", fmt.Sprintf("%d", nowEpoch),
-		"--kdc-time", fmt.Sprintf("%d", nowEpoch-req.SkewSec),
-		"--warn-window-sec", fmt.Sprintf("%d", warnWin),
+	args := []string{}
+	var chronoaEnv []string
+	if scheme == "FILE" {
+		args = append(args, "--ccache", ccPath)
+	} else {
+		chronoaEnv = append(chronoaEnv, "KRB5CCNAME="+ccPath)
+	}
+	if req.KdcTimeEpoch > 0 {
+		args = append(args, "--kdc-time", strconv.FormatInt(req.KdcTimeEpoch, 10))
+	}
+	args = append(args,
+		"--warn-window-sec", strconv.FormatInt(warnWin, 10),
 		"--once",
 		"--json",
+	)
+
+	data, exitCode, stderrStr, execErr := s.runBinaryJSON("chronoa", chronoaEnv, args...)
+	if execErr != nil {
+		return errRow("OP-02", "Chronoa", "ccache-watchdog", ccPath, exitCode, execErr),
+			nil, exitCode, fmt.Sprintf("[CHRONOA] error executing chronoa: %v (%s)", execErr, stderrStr)
 	}
-	if req.Renew {
-		renewCmd := fmt.Sprintf("%q -refresh-ccache %q", s.selfExe, ccPath)
-		args = append(args, "--renew-cmd", renewCmd)
+	if data == nil {
+		data = map[string]any{}
 	}
 
-	data, exitCode, stderrStr, err := s.runBinaryJSON("chronoa", nil, args...)
-	if err != nil {
-		return errRow("OP-02", "Chronoa", "ccache-watchdog", ccPath, exitCode, err),
-			nil, exitCode, fmt.Sprintf("[CHRONOA] error executing chronoa: %v (%s)", err, stderrStr)
+	if renewAttempted {
+		data["renew_attempted"] = true
+		data["renew_exit_code"] = renewExit
+		if renewErrMsg != "" {
+			data["renew_error"] = renewErrMsg
+		}
+		if renewed && exitCode == 0 {
+			data["renewed"] = true
+			data["status"] = "RENEWED"
+		} else if !renewed {
+			data["renewed"] = false
+			if exitCode == 0 {
+				exitCode = 2
+				data["exit_code"] = 2
+				data["status"] = "RENEW_FAILED"
+			}
+		}
 	}
 
 	princ := strField(data, "default_principal")
@@ -519,13 +674,31 @@ func (s *Server) execChronoaCheck(req Request) (Row, map[string]any, int, string
 	ttl := intField(data, "ttl_sec")
 	skew := intField(data, "skew_sec")
 	status := strField(data, "status")
+	if status == "" {
+		status = "ERROR"
+	}
+
+	permOrTTL := fmt.Sprintf("ttl=%ds", ttl)
+	if status == "MISSING" || status == "NO_CREDENTIALS" {
+		permOrTTL = "ttl=-"
+	}
+
+	detail := encName
+	if renewErrMsg != "" {
+		if detail == "" || detail == "-" {
+			detail = "renew failed"
+		} else {
+			detail += " (renew failed)"
+		}
+	}
+
 	row := Row{
 		ID:        "OP-02",
 		Operative: "Chronoa",
 		Module:    "ccache-watchdog",
 		Target:    princ,
-		Detail:    encName,
-		PermOrTTL: fmt.Sprintf("ttl=%ds", ttl),
+		Detail:    detail,
+		PermOrTTL: permOrTTL,
 		SkewOrAux: fmt.Sprintf("skew=%ds", skew),
 		ExitCode:  exitCode,
 		Status:    status,
@@ -533,6 +706,9 @@ func (s *Server) execChronoaCheck(req Request) (Row, map[string]any, int, string
 	}
 	logLine := fmt.Sprintf("[CHRONOA] status=%s exit=%d principal=%s enctype=%s ttl=%ds skew=%ds renewed=%v",
 		status, exitCode, princ, encName, ttl, skew, boolField(data, "renewed"))
+	if renewErrMsg != "" {
+		logLine += fmt.Sprintf(" renew_error=%q", renewErrMsg)
+	}
 	return row, data, exitCode, logLine
 }
 
@@ -592,14 +768,20 @@ func (s *Server) execRangaStatus(isolate bool, mode string) (Row, map[string]any
 }
 
 func (s *Server) execRangaPurge(req Request) (Row, map[string]any, int, string) {
-	target := req.PurgePath
-	if target == "" {
-		target = s.defaultPurgePath()
-		s.mu.Lock()
-		if _, err := os.Stat(target); os.IsNotExist(err) {
-			_ = writeDemoSecretFile(target)
-		}
-		s.mu.Unlock()
+	target := strings.TrimSpace(req.PurgePath)
+	if err := validatePurgeTarget(target); err != nil {
+		return Row{
+				ID:        "OP-05",
+				Operative: "Ranga",
+				Module:    "nist-purge",
+				Target:    target,
+				Detail:    "validation failed",
+				PermOrTTL: "-",
+				SkewOrAux: err.Error(),
+				ExitCode:  1,
+				Status:    "USAGE_ERROR",
+			},
+			nil, 1, fmt.Sprintf("[RANGA:purge] rejected target: %v", err)
 	}
 
 	args := []string{"--purge", target}
@@ -643,103 +825,393 @@ func (s *Server) execRangaPurge(req Request) (Row, map[string]any, int, string) 
 	return row, data, exitCode, logLine
 }
 
-func (s *Server) buildTanukiArgs(subcmd string, req Request) ([]string, string) {
-	arg := strings.TrimSpace(req.TargetArg)
-	orDefault := func(fallback string) string {
-		if arg != "" {
-			return arg
+func hasFlag(args []string, flags ...string) bool {
+	for _, a := range args {
+		for _, f := range flags {
+			if a == f || strings.HasPrefix(a, f+"=") {
+				return true
+			}
 		}
-		return fallback
 	}
-	kt := s.defaultKeytabPath()
-	cc := s.defaultCCachePath()
+	return false
+}
+
+func (s *Server) buildTanukiArgs(subcmd string, req Request, includeOpsec bool) ([]string, string, error) {
+	arg := strings.TrimSpace(req.TargetArg)
+	if arg != "" {
+		if err := validateCleanArg(arg, true); err != nil {
+			return nil, arg, err
+		}
+		if err := validateTanukiArgs([]string{arg}); err != nil {
+			return nil, arg, err
+		}
+	}
+
+	kt := strings.TrimSpace(req.KeytabPath)
+	if kt != "" {
+		if err := validatePathInput(kt); err != nil {
+			return nil, kt, err
+		}
+	}
+	cc := strings.TrimSpace(req.CcachePath)
+	if cc != "" {
+		if strings.HasPrefix(cc, "FILE:") {
+			cc = strings.TrimPrefix(cc, "FILE:")
+		}
+		if err := validatePathInput(cc); err != nil {
+			return nil, cc, err
+		}
+	}
+	krb5Conf := strings.TrimSpace(req.Krb5ConfPath)
+	if krb5Conf != "" {
+		if err := validatePathInput(krb5Conf); err != nil {
+			return nil, krb5Conf, err
+		}
+	}
+	kcmSock := strings.TrimSpace(req.KcmSocket)
+	if kcmSock != "" {
+		if err := validatePathInput(kcmSock); err != nil {
+			return nil, kcmSock, err
+		}
+	}
 
 	if len(req.Args) > 0 {
-		out := []string{subcmd}
-		hasJson := false
-		for _, a := range req.Args {
-			if a == "--json" || a == "-j" {
-				hasJson = true
-			}
-			out = append(out, a)
+		if err := validateTanukiArgs(req.Args); err != nil {
+			return nil, strings.Join(req.Args, " "), err
 		}
-		if !hasJson {
+		out := []string{subcmd}
+		if subcmd == "fix" {
+			applyMode := hasFlag(req.Args, "--apply")
+			dryRunMode := hasFlag(req.Args, "--dry-run")
+			for _, a := range req.Args {
+				if a == "--apply" {
+					continue
+				}
+				out = append(out, a)
+			}
+			if !dryRunMode && !applyMode {
+				out = append(out, "--dry-run")
+			}
+		} else {
+			out = append(out, req.Args...)
+		}
+		switch subcmd {
+		case "doctor":
+			if kt != "" && !hasFlag(req.Args, "--keytab", "-k") {
+				out = append(out, "--keytab", kt)
+			}
+			if cc != "" && !hasFlag(req.Args, "--ccache", "-c") {
+				out = append(out, "--ccache", cc)
+			}
+			if krb5Conf != "" && !hasFlag(req.Args, "--krb5-conf") {
+				out = append(out, "--krb5-conf", krb5Conf)
+			}
+			if kcmSock != "" && !hasFlag(req.Args, "--sssd-pipe") {
+				out = append(out, "--sssd-pipe", kcmSock)
+			}
+		case "fix":
+			if kt != "" && !hasFlag(req.Args, "--keytab", "-k") {
+				out = append(out, "--keytab", kt)
+			}
+			if cc != "" && !hasFlag(req.Args, "--ccache", "-c") {
+				out = append(out, "--ccache", cc)
+			}
+			if krb5Conf != "" && !hasFlag(req.Args, "--krb5-conf") {
+				out = append(out, "--krb5-conf", krb5Conf)
+			}
+		case "config":
+			if !hasFlag(req.Args, "-o", "--out", "--stdout") {
+				out = append(out, "--stdout")
+			}
+		case "kcm":
+			if !hasFlag(req.Args, "-o", "--out") {
+				out = append(out, "-o", filepath.Join(s.workDir, "kcm_out"))
+			}
+		case "purge":
+			for _, a := range req.Args {
+				if a == "--all" {
+					continue
+				}
+				if strings.HasPrefix(a, "-") {
+					if eq := strings.IndexByte(a, '='); eq > 0 {
+						if err := validatePurgeTarget(a[eq+1:]); err != nil {
+							return nil, a[eq+1:], err
+						}
+					}
+					continue
+				}
+				if err := validatePurgeTarget(a); err != nil {
+					return nil, a, err
+				}
+			}
+		case "blast":
+			if kt != "" && !hasFlag(req.Args, "--keytab", "-k") {
+				out = append(out, "--keytab", kt)
+			}
+			if cc != "" && !hasFlag(req.Args, "--ccache", "-c") {
+				out = append(out, "--ccache", cc)
+			}
+		case "auth":
+			if kt != "" && !hasFlag(req.Args, "--keytab", "-k") {
+				out = append(out, "--keytab", kt)
+			}
+		case "tgs":
+			if cc != "" && !hasFlag(req.Args, "--ccache", "-c") {
+				out = append(out, "--ccache", cc)
+			}
+		}
+		if !hasFlag(req.Args, "--json", "-j") {
 			out = append(out, "--json")
 		}
-		return out, strings.Join(req.Args, " ")
+		return out, strings.Join(req.Args, " "), nil
 	}
 
 	switch subcmd {
 	case "doctor":
-		return []string{"doctor", "--keytab", kt, "--ccache", cc, "--opsec", "--json"}, "keytab+ccache"
-	case "fix":
-		return []string{"fix", "--keytab", kt, "--ccache", cc, "--realm", "TEMPEST.LOCAL", "--kdc", "127.0.0.1", "--dry-run", "--json"}, "dry-run"
-	case "keytab":
-		t := orDefault(kt)
-		return []string{"keytab", t, "--json"}, filepath.Base(t)
-	case "config":
-		r := orDefault("TEMPEST.LOCAL")
-		return []string{"config", "--realm", r, "--kdc", "127.0.0.1", "--enforce-aes", "--fast", "--stdout", "--json"}, r
-	case "triage":
-		if arg != "" {
-			return []string{"triage", arg, "--json"}, arg
+		out := []string{"doctor"}
+		if kt != "" {
+			out = append(out, "--keytab", kt)
 		}
-		return []string{"triage", "SKEW", "--json"}, "SKEW"
-	case "ladder":
-		return []string{"ladder", "--json"}, "5-rungs"
-	case "nhi":
-		if arg != "" {
-			parts := strings.Fields(arg)
-			return append(append([]string{"nhi"}, parts...), "--json"), arg
+		if cc != "" {
+			out = append(out, "--ccache", cc)
 		}
-		return []string{"nhi", "mesh", "--json"}, "mesh"
-	case "token":
-		t := orDefault(s.defaultJwtPath())
-		return []string{"token", t, "--json"}, filepath.Base(t)
-	case "blast":
-		if arg != "" {
-			return []string{"blast", arg, "--json"}, arg
+		if krb5Conf != "" {
+			out = append(out, "--krb5-conf", krb5Conf)
 		}
-		return []string{"blast", "--keytab", kt, "--ccache", cc, "--json"}, "keytab+ccache"
-	case "adcs":
-		t := orDefault(s.defaultAdcsPath())
-		return []string{"adcs", "-f", t, "--json"}, filepath.Base(t)
-	case "pac":
-		t := orDefault(s.defaultPacPath())
-		return []string{"pac", t, "--json"}, filepath.Base(t)
-	case "shadow":
-		t := orDefault(demoShadowHex)
-		return []string{"shadow", t, "--json"}, "keyCredLink"
-	case "kcm":
-		t := orDefault(cc)
-		outDir := filepath.Join(s.workDir, "kcm_out")
-		return []string{"kcm", "-f", t, "-o", outDir, "--json"}, filepath.Base(t)
-	case "purge":
-		t := orDefault(s.defaultPurgePath())
-		if t == s.defaultPurgePath() {
-			s.mu.Lock()
-			if _, err := os.Stat(t); os.IsNotExist(err) {
-				_ = writeDemoSecretFile(t)
-			}
-			s.mu.Unlock()
+		if kcmSock != "" {
+			out = append(out, "--sssd-pipe", kcmSock)
 		}
-		return []string{"purge", t, "--json"}, filepath.Base(t)
-	case "skill":
-		return []string{"skill", "--json"}, "manifest"
-	default:
-		out := []string{subcmd}
-		if arg != "" {
-			out = append(out, strings.Fields(arg)...)
+		if includeOpsec {
+			out = append(out, "--opsec")
 		}
 		out = append(out, "--json")
-		return out, orDefault(subcmd)
+		lbl := "host"
+		if kt != "" || cc != "" || krb5Conf != "" {
+			lbl = "configured"
+		}
+		return out, lbl, nil
+
+	case "fix":
+		out := []string{"fix", "--dry-run"}
+		if kt != "" {
+			out = append(out, "--keytab", kt)
+		}
+		if cc != "" {
+			out = append(out, "--ccache", cc)
+		}
+		if krb5Conf != "" {
+			out = append(out, "--krb5-conf", krb5Conf)
+		}
+		out = append(out, "--json")
+		return out, "dry-run", nil
+
+	case "keytab":
+		t := arg
+		if t == "" {
+			t = kt
+		}
+		if t == "" {
+			t = resolveKeytabPath("")
+		}
+		if err := validatePathInput(t); err != nil {
+			return nil, t, err
+		}
+		return []string{"keytab", t, "--json"}, filepath.Base(t), nil
+
+	case "config":
+		if arg == "" {
+			return nil, "-", errors.New("config requires explicit arguments (e.g. --realm CORP.LOCAL --kdc 192.168.56.106)")
+		}
+		parts, err := splitQuotedArgs(arg)
+		if err != nil {
+			return nil, arg, err
+		}
+		if err := validateTanukiArgs(parts); err != nil {
+			return nil, arg, err
+		}
+		out := append([]string{"config"}, parts...)
+		if !hasFlag(parts, "-o", "--out", "--stdout") {
+			out = append(out, "--stdout")
+		}
+		if !hasFlag(parts, "--json", "-j") {
+			out = append(out, "--json")
+		}
+		return out, arg, nil
+
+	case "triage":
+		if arg != "" {
+			if strings.HasPrefix(arg, "-") {
+				return nil, arg, errors.New("triage query must not start with '-'")
+			}
+			return []string{"triage", arg, "--json"}, arg, nil
+		}
+		return []string{"triage", "--json"}, "all", nil
+
+	case "ladder":
+		return []string{"ladder", "--json"}, "5-rungs", nil
+
+	case "nhi":
+		if arg != "" {
+			parts, err := splitQuotedArgs(arg)
+			if err != nil {
+				return nil, arg, err
+			}
+			if err := validateTanukiArgs(parts); err != nil {
+				return nil, arg, err
+			}
+			out := append([]string{"nhi"}, parts...)
+			if !hasFlag(parts, "--json", "-j") {
+				out = append(out, "--json")
+			}
+			return out, arg, nil
+		}
+		return []string{"nhi", "scan", "--json"}, "scan", nil
+
+	case "token":
+		if arg == "" {
+			return nil, "-", errors.New("token path or JWT string is required")
+		}
+		if strings.HasPrefix(arg, "-") {
+			return nil, arg, errors.New("token path/value must not start with '-'")
+		}
+		return []string{"token", arg, "--json"}, filepath.Base(arg), nil
+
+	case "blast":
+		if arg != "" {
+			parts, err := splitQuotedArgs(arg)
+			if err != nil {
+				return nil, arg, err
+			}
+			if err := validateTanukiArgs(parts); err != nil {
+				return nil, arg, err
+			}
+			out := append([]string{"blast"}, parts...)
+			if kt != "" && !hasFlag(parts, "--keytab", "-k") {
+				out = append(out, "--keytab", kt)
+			}
+			if cc != "" && !hasFlag(parts, "--ccache", "-c") {
+				out = append(out, "--ccache", cc)
+			}
+			if !hasFlag(parts, "--json", "-j") {
+				out = append(out, "--json")
+			}
+			return out, arg, nil
+		}
+		out := []string{"blast"}
+		if kt != "" {
+			out = append(out, "--keytab", kt)
+		}
+		if cc != "" {
+			out = append(out, "--ccache", cc)
+		}
+		if kt == "" && cc == "" {
+			return nil, "-", errors.New("blast requires target principal/source, configured keytab, or ccache")
+		}
+		out = append(out, "--json")
+		return out, "configured", nil
+
+	case "adcs":
+		if arg == "" {
+			return nil, "-", errors.New("adcs templates JSON/LDIF or certificate file path is required")
+		}
+		if err := validatePathInput(arg); err != nil {
+			return nil, arg, err
+		}
+		return []string{"adcs", "-f", arg, "--json"}, filepath.Base(arg), nil
+
+	case "pac":
+		if arg == "" {
+			return nil, "-", errors.New("pac file path or hex/base64 payload is required")
+		}
+		if strings.HasPrefix(arg, "-") {
+			return nil, arg, errors.New("pac path/payload must not start with '-'")
+		}
+		return []string{"pac", arg, "--json"}, filepath.Base(arg), nil
+
+	case "shadow":
+		if arg == "" {
+			return nil, "-", errors.New("shadow credential file path, hex, or DN-Binary input is required")
+		}
+		if strings.HasPrefix(arg, "-") {
+			return nil, arg, errors.New("shadow input must not start with '-'")
+		}
+		return []string{"shadow", arg, "--json"}, "keyCredLink", nil
+
+	case "kcm":
+		outDir := filepath.Join(s.workDir, "kcm_out")
+		if arg != "" {
+			if err := validatePathInput(arg); err != nil {
+				return nil, arg, err
+			}
+			return []string{"kcm", "-f", arg, "-o", outDir, "--json"}, filepath.Base(arg), nil
+		}
+		return []string{"kcm", "-o", outDir, "--json"}, "local-kcm", nil
+
+	case "purge":
+		if arg == "" {
+			return nil, "-", errors.New("purge target file path or --all is required")
+		}
+		if arg == "--all" {
+			return []string{"purge", "--all", "--json"}, "--all", nil
+		}
+		if err := validatePurgeTarget(arg); err != nil {
+			return nil, arg, err
+		}
+		return []string{"purge", arg, "--json"}, filepath.Base(arg), nil
+
+	case "skill":
+		return []string{"skill", "--json"}, "manifest", nil
+
+	default:
+		out := []string{subcmd}
+		var parts []string
+		if arg != "" {
+			var err error
+			parts, err = splitQuotedArgs(arg)
+			if err != nil {
+				return nil, arg, err
+			}
+			if err := validateTanukiArgs(parts); err != nil {
+				return nil, arg, err
+			}
+			out = append(out, parts...)
+		}
+		if subcmd == "auth" && kt != "" && !hasFlag(parts, "--keytab", "-k") {
+			out = append(out, "--keytab", kt)
+		}
+		if subcmd == "tgs" && cc != "" && !hasFlag(parts, "--ccache", "-c") {
+			out = append(out, "--ccache", cc)
+		}
+		if !hasFlag(parts, "--json", "-j") {
+			out = append(out, "--json")
+		}
+		return out, arg, nil
 	}
 }
 
 func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
+	return s.execTanukiWithOpsec(req, true)
+}
+
+func (s *Server) execTanukiWithOpsec(req Request, includeOpsec bool) (Row, map[string]any, int, string) {
 	subcmd := strings.ToLower(strings.TrimSpace(req.Subcommand))
 	if subcmd == "" {
 		subcmd = "doctor"
+	}
+	if !allowedTanukiSubcmds[subcmd] {
+		err := fmt.Errorf("unknown or disallowed tanuki subcommand: %s", subcmd)
+		return Row{
+				ID:        "OP-06",
+				Operative: "Tanuki",
+				Module:    subcmd,
+				Target:    "-",
+				Detail:    "validation failed",
+				PermOrTTL: "tanuki-nhi",
+				SkewOrAux: err.Error(),
+				ExitCode:  1,
+				Status:    "USAGE_ERROR",
+			},
+			nil, 1, fmt.Sprintf("[TANUKI:%s] rejected: %v", subcmd, err)
 	}
 	if s.tanukiBin == "" {
 		err := errors.New("tanuki binary not found")
@@ -747,7 +1219,22 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 			nil, 3, "[TANUKI:" + subcmd + "] error: tanuki binary not found"
 	}
 
-	args, targetLabel := s.buildTanukiArgs(subcmd, req)
+	args, targetLabel, buildErr := s.buildTanukiArgs(subcmd, req, includeOpsec)
+	if buildErr != nil {
+		return Row{
+				ID:        "OP-06",
+				Operative: "Tanuki",
+				Module:    subcmd,
+				Target:    targetLabel,
+				Detail:    "usage error",
+				PermOrTTL: "tanuki-nhi",
+				SkewOrAux: buildErr.Error(),
+				ExitCode:  1,
+				Status:    "USAGE_ERROR",
+			},
+			nil, 1, fmt.Sprintf("[TANUKI:%s] %v", subcmd, buildErr)
+	}
+
 	data, exitCode, stderrStr, err := s.runJSONProcess(s.tanukiBin, nil, args...)
 	if err != nil {
 		return errRow("OP-06", "Tanuki", subcmd, targetLabel, exitCode, err),
@@ -758,9 +1245,17 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 	if status == "" {
 		switch subcmd {
 		case "keytab", "triage", "ladder", "kcm":
-			status = "PARSED"
+			if exitCode == 0 {
+				status = "PARSED"
+			} else {
+				status = "ERROR"
+			}
 		case "skill":
-			status = "READY"
+			if exitCode == 0 {
+				status = "READY"
+			} else {
+				status = "ERROR"
+			}
 		default:
 			if exitCode == 0 {
 				status = "OK"
@@ -780,10 +1275,16 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 		}
 		perm = "pre-flight"
 	case "keytab", "kcm":
-		aux = fmt.Sprintf("entries=%d", count)
+		if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
+			aux = fmt.Sprintf("entries=%d", count)
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
+		}
 		perm = "rfc4120"
 	case "ladder":
-		aux = fmt.Sprintf("rungs=%d", count)
+		if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
+			aux = fmt.Sprintf("rungs=%d", count)
+		}
 		perm = "decision"
 	case "adcs":
 		if findings, ok := data["findings"].([]any); ok {
@@ -793,6 +1294,8 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 			} else {
 				status = "CLEAN"
 			}
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
 		}
 		perm = "esc1-11"
 	case "triage":
@@ -801,45 +1304,131 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 			if status == "" || status == "PARSED" {
 				status = "MATCHED"
 			}
-		} else {
+		} else if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
 			aux = fmt.Sprintf("codes=%d", count)
 		}
 		perm = "protocol"
 	case "pac":
 		if bc := intField(data, "buffer_count"); bc > 0 {
 			aux = fmt.Sprintf("buffers=%d", bc)
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
 		}
 		perm = "ms-pac"
 	case "shadow":
 		if ver := strField(data, "version_str"); ver != "" {
 			aux = "v" + ver
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
 		}
 		perm = "ms-adts"
 	case "blast":
-		if rt := strField(data, "risk_tier"); rt != "" {
-			aux = "tier=" + rt
-			if status == "OK" {
-				status = rt
+		if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
+			sev := strings.ToUpper(strField(data, "severity"))
+			score := intField(data, "blast_score")
+			if tierVal, hasTier := data["tier"]; hasTier && tierVal != nil {
+				aux = fmt.Sprintf("tier=%d score=%d", intField(data, "tier"), score)
+			} else if tl := strField(data, "tier_label"); tl != "" {
+				aux = tl
 			}
+			if sev != "" {
+				status = sev
+			}
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
 		}
 		perm = "ad-tier"
 	case "token":
-		aux = strField(data, "risk_level")
-		if aux == "" {
-			aux = "jwt"
+		if exitCode != 0 || status == "ERROR" || status == "REFUSED" {
+			if rc := strField(data, "reason_code"); rc != "" {
+				aux = rc
+			}
+		} else {
+			risk := ""
+			if se, ok := data["security_evaluation"].(map[string]any); ok && se != nil {
+				risk = strings.ToUpper(strField(se, "risk_level"))
+			}
+			if risk == "" {
+				risk = strings.ToUpper(strField(data, "risk_level"))
+			}
+			if risk != "" {
+				aux = "risk=" + risk
+				if status == "OK" || status == "" {
+					status = risk
+				}
+			} else {
+				aux = "jwt"
+			}
 		}
 		perm = "rfc8693"
 	case "nhi":
-		if cnt := intField(data, "count"); cnt >= 0 {
-			aux = fmt.Sprintf("identities=%d", cnt)
+		if exitCode != 0 || status == "ERROR" || status == "REFUSED" {
+			if rc := strField(data, "reason_code"); rc != "" {
+				aux = rc
+			} else {
+				aux = fmt.Sprintf("rc=%d", exitCode)
+			}
+			if status == "" || status == "OK" {
+				status = "ERROR"
+			}
+		} else if tokens, ok := data["discovered_tokens"].([]any); ok {
+			aux = fmt.Sprintf("tokens=%d", len(tokens))
+			if status == "OK" || status == "" {
+				if len(tokens) > 0 {
+					status = "SUCCESS"
+				} else {
+					status = "NONE_DISCOVERED"
+				}
+			}
+		} else if _, hasCount := data["count"]; hasCount {
+			aux = fmt.Sprintf("identities=%d", intField(data, "count"))
+		} else if idents, ok := data["discovered_identities"].([]any); ok {
+			aux = fmt.Sprintf("identities=%d", len(idents))
 		}
-		perm = "mesh"
+		if targetLabel == "scan" || strings.HasPrefix(targetLabel, "scan ") {
+			perm = "nhi-scan"
+		} else if targetLabel == "mesh" || strings.HasPrefix(targetLabel, "mesh ") {
+			perm = "mesh"
+		} else {
+			perm = "nhi"
+		}
+	case "purge":
+		if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
+			aux = fmt.Sprintf("shredded=%d", intField(data, "shredded_count"))
+		} else if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
+		}
+		perm = "nist-800-88"
 	case "config":
-		aux = strField(data, "realm")
+		if r := strField(data, "realm"); r != "" {
+			aux = r
+		}
 		perm = "zero-dns"
 	case "fix":
-		aux = "dry-run"
+		if exitCode == 0 && status != "ERROR" && status != "REFUSED" {
+			aux = "dry-run"
+		}
 		perm = "self-heal"
+	case "auth", "tgs":
+		if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
+		} else if p := strField(data, "principal"); p != "" {
+			aux = p
+		} else if spn := strField(data, "spn"); spn != "" {
+			aux = spn
+		}
+		if subcmd == "auth" {
+			perm = "as-req"
+		} else {
+			perm = "tgs-req"
+		}
+	case "ldap":
+		if rc := strField(data, "reason_code"); rc != "" {
+			aux = rc
+		} else if bd := strField(data, "base_dn"); bd != "" {
+			aux = bd
+		}
+		perm = "ldap"
 	}
 
 	row := Row{
@@ -859,12 +1448,49 @@ func (s *Server) execTanuki(req Request) (Row, map[string]any, int, string) {
 	return row, data, exitCode, logLine
 }
 
+func hostUserInfo() (string, int, string) {
+	username := os.Getenv("USER")
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		username = u.Username
+	}
+	if username == "" {
+		username = "operator"
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "localhost"
+	}
+	return username, os.Getuid(), host
+}
+
+func (s *Server) isAuthorized(token string) bool {
+	if s.authToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
+}
+
 func (s *Server) handleRequest(req Request) Response {
 	ts := time.Now().Format("15:04:05")
 	resp := Response{
 		Action:    req.Action,
 		Timestamp: ts,
 	}
+
+	if !s.isAuthorized(req.AuthToken) {
+		resp.OK = false
+		resp.ExitCode = 1
+		resp.Status = "UNAUTHORIZED"
+		resp.Error = "Invalid or missing auth_token"
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] unauthorized request action=%s", ts, req.Action)}
+		return resp
+	}
+
+	resolvedCC, ccScheme, _ := resolveCCachePath(req.CcachePath)
+	resolvedKCM := s.resolveKcmSocket(req.KcmSocket)
+	resolvedKT := resolveKeytabPath(req.KeytabPath)
+	resolvedKrb5 := resolveKrb5ConfPath(req.Krb5ConfPath)
+	_, kinitErr := exec.LookPath("kinit")
 
 	switch req.Action {
 	case "ping":
@@ -888,21 +1514,30 @@ func (s *Server) handleRequest(req Request) Response {
 			resp.Status = "MISSING_BINARIES"
 			resp.ExitCode = 3
 		}
+		uname, uid, hostname := hostUserInfo()
 		resp.Data = map[string]any{
-			"server":           "ciel-teamserver",
-			"tempest_dir":      s.tempestDir,
-			"tanuki_bin":       s.tanukiBin,
-			"work_dir":         s.workDir,
-			"default_ccache":   s.defaultCCachePath(),
-			"default_keytab":   s.defaultKeytabPath(),
-			"default_purge":    s.defaultPurgePath(),
-			"binaries_present": present,
-			"pid":              os.Getpid(),
+			"server":              "ciel-teamserver",
+			"tempest_dir":         s.tempestDir,
+			"tanuki_bin":          s.tanukiBin,
+			"work_dir":            s.workDir,
+			"resolved_ccache":     resolvedCC,
+			"ccache_scheme":       ccScheme,
+			"resolved_kcm_socket": resolvedKCM,
+			"resolved_keytab":     resolvedKT,
+			"resolved_krb5_conf":  resolvedKrb5,
+			"kinit_available":     kinitErr == nil,
+			"auth_enforced":       true,
+			"binaries_present":    present,
+			"pid":                 os.Getpid(),
+			"user":                uname,
+			"uid":                 uid,
+			"hostname":            hostname,
+			"arch":                runtime.GOARCH,
 		}
 		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] ping status=%s tempest_dir=%s tanuki=%s", ts, resp.Status, s.tempestDir, s.tanukiBin)}
 
 	case "souei_probe":
-		row, data, rc, logLine := s.execSoueiProbe(req.WatchInotify)
+		row, data, rc, logLine := s.execSoueiProbe(req, req.WatchInotify)
 		resp.OK = true
 		resp.ExitCode = rc
 		resp.Status = row.Status
@@ -911,7 +1546,7 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Logs = []string{ts + " " + logLine}
 
 	case "souei_watch":
-		row, data, rc, logLine := s.execSoueiProbe(true)
+		row, data, rc, logLine := s.execSoueiProbe(req, true)
 		resp.OK = true
 		resp.ExitCode = rc
 		resp.Status = row.Status
@@ -965,26 +1600,43 @@ func (s *Server) handleRequest(req Request) Response {
 		resp.Logs = []string{ts + " " + logLine}
 
 	case "full_sync":
-		r1, d1, rc1, l1 := s.execSoueiProbe(false)
+		r1, d1, rc1, l1 := s.execSoueiProbe(req, false)
 		r2, d2, rc2, l2 := s.execChronoaCheck(req)
 		r3, d3, rc3, l3 := s.execRangaStatus(false, "")
 		r4, d4, rc4, l4 := s.execRangaStatus(true, req.IsolateMode)
-		r5, d5, rc5, l5 := s.execTanuki(Request{Subcommand: "doctor"})
+		docReq := Request{
+			Subcommand:   "doctor",
+			KeytabPath:   req.KeytabPath,
+			CcachePath:   req.CcachePath,
+			Krb5ConfPath: req.Krb5ConfPath,
+			KcmSocket:    req.KcmSocket,
+		}
+		r5, d5, rc5, l5 := s.execTanukiWithOpsec(docReq, false)
 		resp.OK = true
 		resp.Status = "SYNCED"
-		if rc1 != 0 || rc2 != 0 || rc3 != 0 || rc4 != 0 || rc5 != 0 {
+		if rc1 != 0 || rc3 != 0 || rc4 != 0 || rc5 != 0 || (rc2 != 0 && rc2 != 3) {
 			resp.Status = "ATTENTION"
 		}
+		uname, uid, hostname := hostUserInfo()
 		resp.Rows = []Row{r1, r2, r3, r4, r5}
 		resp.Data = map[string]any{
-			"souei":            d1,
-			"chronoa":          d2,
-			"ranga_baseline":   d3,
-			"ranga_isolated":   d4,
-			"tanuki_doctor":    d5,
-			"default_ccache":   s.defaultCCachePath(),
-			"default_keytab":   s.defaultKeytabPath(),
-			"default_purge":    s.defaultPurgePath(),
+			"souei":               d1,
+			"chronoa":             d2,
+			"ranga_baseline":      d3,
+			"ranga_isolated":      d4,
+			"tanuki_doctor":       d5,
+			"work_dir":            s.workDir,
+			"resolved_ccache":     resolvedCC,
+			"ccache_scheme":       ccScheme,
+			"resolved_kcm_socket": resolvedKCM,
+			"resolved_keytab":     resolvedKT,
+			"resolved_krb5_conf":  resolvedKrb5,
+			"kinit_available":     kinitErr == nil,
+			"auth_enforced":       true,
+			"user":                uname,
+			"uid":                 uid,
+			"hostname":            hostname,
+			"arch":                runtime.GOARCH,
 		}
 		resp.Logs = []string{ts + " " + l1, ts + " " + l2, ts + " " + l3, ts + " " + l4, ts + " " + l5}
 
@@ -1000,9 +1652,16 @@ func (s *Server) handleRequest(req Request) Response {
 
 func (s *Server) serveConn(conn net.Conn) {
 	defer conn.Close()
+	if s.connSem != nil {
+		defer func() { <-s.connSem }()
+	}
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if !scanner.Scan() {
+			break
+		}
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
@@ -1025,7 +1684,10 @@ func (s *Server) serveConn(conn net.Conn) {
 			continue
 		}
 		encoded = append(encoded, '\n')
-		_, _ = conn.Write(encoded)
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if _, wErr := conn.Write(encoded); wErr != nil {
+			break
+		}
 	}
 }
 
@@ -1056,6 +1718,55 @@ func findTanukiBin(selfExe, tempestDir string) string {
 	return ""
 }
 
+func defaultWorkDir() string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); xdg != "" && filepath.IsAbs(xdg) {
+		return filepath.Join(xdg, "ciel_workspace")
+	}
+	if cacheDir, err := os.UserCacheDir(); err == nil && cacheDir != "" {
+		return filepath.Join(cacheDir, "ciel_workspace")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ciel_workspace_%d", os.Getuid()))
+}
+
+func generateRandomToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func (s *Server) initAuthToken(explicitTokenFile string) error {
+	if err := validateSecureDir(s.workDir); err != nil {
+		return err
+	}
+	envToken := strings.TrimSpace(os.Getenv("CIEL_AUTH_TOKEN"))
+	if envToken != "" {
+		s.authToken = envToken
+		if explicitTokenFile != "" {
+			if err := writeFileNoFollow(explicitTokenFile, []byte(envToken+"\n"), 0o600); err != nil {
+				return err
+			}
+			s.tokenFile = explicitTokenFile
+		}
+		return nil
+	}
+	tok, err := generateRandomToken()
+	if err != nil {
+		return err
+	}
+	s.authToken = tok
+	tf := strings.TrimSpace(explicitTokenFile)
+	if tf == "" {
+		tf = filepath.Join(s.workDir, "teamserver.token")
+	}
+	if err := writeFileNoFollow(tf, []byte(tok+"\n"), 0o600); err != nil {
+		return err
+	}
+	s.tokenFile = tf
+	return nil
+}
+
 func main() {
 	defaultDir := os.Getenv("TEMPEST_BIN_DIR")
 	if defaultDir == "" {
@@ -1067,17 +1778,10 @@ func main() {
 
 	addr := flag.String("addr", "127.0.0.1:40056", "TCP listen address for Qt desktop clients")
 	tempestDir := flag.String("tempest-dir", defaultDir, "Directory containing built Tempest binaries")
-	workDir := flag.String("work-dir", "/tmp/ciel_workspace", "Workspace directory for CCACHE and purge demo artifacts")
-	refreshPath := flag.String("refresh-ccache", "", "Internal helper: write fresh CCACHE v4 at path and exit")
+	workDir := flag.String("work-dir", defaultWorkDir(), "Workspace directory for runtime state and KCM output")
+	kcmSock := flag.String("kcm-socket", "", "Explicit KCM UNIX socket path to monitor (default: auto-discover system KCM socket)")
+	tokenFile := flag.String("token-file", "", "Path to write 0600 RPC auth token when CIEL_AUTH_TOKEN is unset")
 	flag.Parse()
-
-	if *refreshPath != "" {
-		if err := writeDemoCCache(*refreshPath, 7200, 18); err != nil {
-			fmt.Fprintf(os.Stderr, "ciel-teamserver: refresh-ccache failed: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
 
 	selfExe, err := os.Executable()
 	if err != nil {
@@ -1108,21 +1812,17 @@ func main() {
 	}
 
 	srv := &Server{
-		tempestDir: resolvedTempestDir,
-		tanukiBin:  findTanukiBin(selfExe, resolvedTempestDir),
-		workDir:    resolvedWorkDir,
-		selfExe:    selfExe,
+		tempestDir:  resolvedTempestDir,
+		tanukiBin:   findTanukiBin(selfExe, resolvedTempestDir),
+		workDir:     resolvedWorkDir,
+		selfExe:     selfExe,
+		kcmSockPath: strings.TrimSpace(*kcmSock),
+		connSem:     make(chan struct{}, 32),
 	}
-	if err := srv.ensureWorkspaceArtifacts(); err != nil {
-		fmt.Fprintf(os.Stderr, "ciel-teamserver: workspace init failed: %v\n", err)
+	if err := srv.initAuthToken(*tokenFile); err != nil {
+		fmt.Fprintf(os.Stderr, "ciel-teamserver: auth/workspace init failed: %v\n", err)
 		os.Exit(1)
 	}
-	kcmLn, err := srv.startKcmSocket()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ciel-teamserver: kcm socket init failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer kcmLn.Close()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -1131,8 +1831,8 @@ func main() {
 	}
 	defer ln.Close()
 
-	fmt.Printf("[ciel-teamserver] listening on %s (tempest=%s, workspace=%s)\n",
-		ln.Addr().String(), srv.tempestDir, srv.workDir)
+	fmt.Printf("[ciel-teamserver] listening on %s (tempest=%s, workspace=%s, token_file=%s)\n",
+		ln.Addr().String(), srv.tempestDir, srv.workDir, srv.tokenFile)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -1150,6 +1850,11 @@ func main() {
 			}
 			continue
 		}
-		go srv.serveConn(conn)
+		select {
+		case srv.connSem <- struct{}{}:
+			go srv.serveConn(conn)
+		default:
+			_ = conn.Close()
+		}
 	}
 }

@@ -3,6 +3,7 @@ TANUKI_REPO  ?= https://github.com/Mafifrizi/tanuki.git
 
 TEMPEST_DIR  ?= $(abspath ../tempest)
 TANUKI_DIR   := $(shell if [ -d ../tanuki ]; then (cd ../tanuki && pwd); elif [ -d ../tanuki-repo ]; then (cd ../tanuki-repo && pwd); else echo "$(abspath ../tanuki)"; fi)
+TANUKI_MODE  ?= python
 PREFIX       ?= $(HOME)/.local
 
 .PHONY: all deps install clean test
@@ -23,14 +24,18 @@ deps: | bin
 		echo "[deps] Cloning Tanuki from $(TANUKI_REPO) into $(TANUKI_DIR)..."; \
 		git clone --depth 1 "$(TANUKI_REPO)" "$(TANUKI_DIR)"; \
 	fi
-	@if [ -x "$(TANUKI_DIR)/target/release/tanuki" ]; then \
+	@if [ "$(TANUKI_MODE)" = "rust" ]; then \
+		if [ ! -x "$(TANUKI_DIR)/target/release/tanuki" ]; then \
+			echo "[deps] Error: TANUKI_MODE=rust requested but $(TANUKI_DIR)/target/release/tanuki not found or not executable"; \
+			exit 1; \
+		fi; \
 		cp -f "$(TANUKI_DIR)/target/release/tanuki" bin/tanuki; \
 	else \
 		printf '#!/bin/sh\nPYTHONPATH="%s$${PYTHONPATH:+:$$PYTHONPATH}" exec python3 -m tanuki "$$@"\n' "$(TANUKI_DIR)" > bin/tanuki; \
 	fi
 	chmod +x bin/tanuki
 
-bin/ciel-teamserver: teamserver/main.go teamserver/go.mod | bin
+bin/ciel-teamserver: teamserver/main.go teamserver/workspace_unix.go teamserver/workspace_windows.go teamserver/go.mod | bin
 	cd teamserver && go build -o ../bin/ciel-teamserver .
 
 bin/ciel-client: client/CMakeLists.txt client/src/main.cpp | bin

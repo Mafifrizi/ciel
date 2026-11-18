@@ -1,44 +1,46 @@
-# Operative Console Commands
+# Operative Console and Menu Commands
 
-Run these commands directly at the prompt inside the active operator tab (Tab autocomplete enabled), or trigger them from the Operatives menu, Tanuki menu, Listeners bar, or Sessions right-click menu.
+Run commands directly inside `Operative Console` (Tab autocomplete enabled), or trigger them from the `Operatives` menu, `Tanuki` menu, `Listeners` dispatch panel, or `Sessions` right-click menu.
 
-## Tempest Runtime Commands
+## Target Configuration & Workspace Navigation
 
-- sync: Run a full_sync sweep across Souei, Chronoa, Ranga baseline, Ranga isolated, and Tanuki doctor.
-- audit: Print an aligned Kerberos CCACHE, Kernel Keyring, and Tanuki verification summary inside the console.
-- souei: Execute a passive /proc/keys ACL audit paired with a live AF_UNIX SO_PEERCRED probe against kcm.sock.
-- watch: Attach Souei Linux inotify real-time access watcher to the workspace CCACHE file.
-- chronoa: Parse the active MIT CCACHE v4 file and validate expiration, encryption type, and drift.
-- skew N: Simulate KDC clock drift of N seconds (values above 300 trigger RFC 4120 CLOCK_SKEW_VIOLATION with exit 2).
-- rc4: Generate a temporary rc4-hmac (enctype 23) ticket to test WEAK_ENCTYPE policy enforcement (exit 2).
-- expired: Generate a temporary expired CCACHE ticket to test EXPIRED lifecycle handling (exit 2).
-- renew: Invoke the Chronoa renewal hook to refresh the workspace CCACHE to +7200s using AES256.
-- isolate: Run a workload wrapped with LD_PRELOAD=libranga.so and verify possessor-only session keyring permissions (0x3f000000).
-- purge: Execute a 3-pass NIST SP 800-88 file wipe (0x00, 0xFF, random), explicit_bzero, and unlink on the target secret artifact.
+- `set` : Display active CCACHE, keytab, `krb5.conf`, and KCM socket targets (either custom override or `auto:` host-discovered).
+- `set <ccache|keytab|krb5conf|kcm> <path>` : Override a target path (mirrors **Field Target Paths** in `Listeners`).
+- `set clear` : Clear all custom overrides and revert to host auto-discovery.
+- `sync` : Run an immediate `full_sync` across `OP-01`..`OP-04` and `OP-06` (`doctor`), resetting `OP-06` back to host health view.
+- `audit` : Print an aligned summary matrix of all recorded operative snapshots in the console.
+- `graph` / `table` : Switch the top-left pane between `Session Graph` and `Sessions`.
+- `clear` / `help` : Clear console output or print the inline command summary.
 
-## Tanuki NHI & AD Engine Commands
+## Tempest Runtime Commands (`OP-01` through `OP-05`)
 
-Invoke any Tanuki module either directly by name or prefixed with tanuki (for example, tanuki doctor or doctor):
+- `souei` (`OP-01`): Probe `/proc/keys`, session keyring ACLs, and `AF_UNIX` `SO_PEERCRED` on any detected or configured KCM socket.
+- `watch [path] [timeout_ms]` (`OP-01`): Attach Souei's Linux `inotify` monitor to a real file path (defaults to active `FILE:` CCACHE if omitted; timeout clamped 100..10000 ms).
+- `chronoa [ccache_path]` (`OP-02`): Parse MIT CCACHE v3/v4 (`$KRB5CCNAME` or `/tmp/krb5cc_<uid>`) and validate expiration, encryption type, and RFC 4120 clock skew.
+- `renew` (`OP-02`): Execute `kinit -R` against the active CCACHE and re-evaluate with Chronoa.
+- `ranga` (`OP-03`): Inspect the current process baseline session keyring.
+- `isolate [wrapper]` (`OP-04`): Verify `0x3f000000` possessor-only session keyring isolation via `LD_PRELOAD=libranga.so` (default) or `ranga --isolate` (`wrapper`).
+- `purge <path> [--revoke-session]` (`OP-05`): Execute Ranga's 3-pass NIST SP 800-88 file overwrite (`0x00`, `0xFF`, random), `explicit_bzero`, and unlink on a single explicit file (and optionally revoke the session keyring).
 
-- doctor: Run pre-flight Kerberos and OPSEC system diagnostics on the workspace keytab and CCACHE.
-- fix: Run closed-loop self-healing checks in dry-run mode against the active keytab and CCACHE.
-- keytab: Parse and inspect the RFC 4120 Keytab v2 binary (service.keytab or custom path).
-- config: Generate a hardened zero-DNS krb5.conf enforcing AES256 and FAST armor.
-- triage [query]: Lookup Kerberos and SSSD error codes (defaults to SKEW).
-- ladder: Display the 5-rung Tactical Decision Ladder.
-- nhi [subcmd]: Scan workload identities and cloud federation mesh (defaults to mesh).
-- token [path]: Validate RFC 8693 workload JWT tokens.
-- blast [source]: Compute Active Directory privilege tiering and blast radius.
-- adcs [file]: Scan AD CS certificate templates and CAs for ESC1 through ESC11 misconfigurations.
-- pac [source]: Decode MS-PAC privilege buffers, group RIDs, and UAC flags.
-- shadow [input]: Decode [MS-ADTS] 2.2.20 msDS-KeyCredentialLink Shadow Credential blobs.
-- kcm [file]: Extract credential cache streams from SSSD KCM databases or CCACHE files.
-- auth / tgs / ldap [flags]: Dispatch live AS-REQ pre-auth, TGS service ticket requests, or LDAP SPN/delegation queries.
-- skill: Output the Tanuki capability manifest as structured JSON.
+## Tanuki NHI & AD Engine Commands (`OP-06`)
 
-## Viewport Navigation
+Invoke any of the 18 Tanuki modules via `tanuki <subcmd> [args...]` or directly by name (for example `doctor` or `tanuki doctor`). Run `tanuki help` inside the console for a quick list. Note that `purge` without prefix invokes Ranga single-file purge, while `tanuki purge` invokes Tanuki cache sanitization.
 
-- graph: Switch the top-left viewport to the interactive 4-column Session Graph.
-- table: Switch the top-left viewport back to the 10-column Sessions table.
-- clear: Clear console output and print a fresh operator session banner.
-- help: Display the inline command table.
+- `doctor [flags]`: Pre-flight Kerberos, SSSD, keytab/CCACHE, and OPSEC diagnostics (automatically uses configured target paths if set).
+- `fix [--apply | flags]`: Closed-loop self-healing checks (defaults to `--dry-run` unless `--apply` is explicitly passed).
+- `keytab [path]`: Parse and inspect an RFC 4120 keytab v2 binary (defaults to configured keytab or `/etc/krb5.keytab`).
+- `config --realm <REALM> --kdc <HOST> [-o <path>]`: Generate a hardened zero-DNS `krb5.conf` (outputs via `--stdout` in JSON unless `-o`/`--out` is specified).
+- `triage [query]`: Lookup Kerberos and SSSD error codes (omit query to list all codes).
+- `ladder`: Display the 5-rung Tactical Decision Ladder.
+- `nhi [scan|mesh|...]`: Scan local filesystem for workload tokens (`scan`, default) or probe cloud/SPIFFE federation mesh (`mesh`).
+- `token <path_or_jwt> [flags]`: Validate RFC 8693 workload JWT tokens.
+- `blast <principal_or_flags>`: Compute Active Directory privilege tiering and blast radius (automatically forwards configured `--keytab` / `--ccache` when omitted).
+- `adcs <file>`: Scan AD CS certificate templates (JSON/LDIF) or X.509 certificates for ESC1 through ESC11 misconfigurations.
+- `pac <path_or_payload>`: Decode MS-PAC privilege buffers, group RIDs, and UAC flags.
+- `shadow <input>`: Decode `[MS-ADTS]` 2.2.20 `msDS-KeyCredentialLink` Shadow Credential blobs.
+- `kcm [file]`: Triage local SSSD KCM caches or extract streams from a specified KCM database/CCACHE file (extracted output goes to `<workspace>/kcm_out` unless `-o` is specified).
+- `auth --keytab <path> --principal <p> --kdc <IP>`: Acquire a Kerberos TGT via live AS-REQ pre-auth.
+- `tgs --spn <svc/host@REALM> [--ccache <path>] --kdc <IP>`: Request a Kerberos TGS service ticket.
+- `ldap --host <DC_IP> --realm <REALM> --query <type>`: Query Active Directory over LDAP/LDAPS (`spn`, `asreproast`, `rbcd`, `shadow`, `unconstrained`, `all`).
+- `tanuki purge <path|--all>`: Cryptographically shred an explicit credential artifact or sweep `--all` discovered ticket caches and temp configs (GUI prompts for confirmation).
+- `skill`: Inspect the Tanuki capability manifest as structured JSON.
