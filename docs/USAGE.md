@@ -68,10 +68,12 @@ What happens automatically on launch:
 
 ### PostgreSQL 16 Fleet Mode (sslmode=verify-full)
 
-1. Provision Shuna PKI and Vault:
+1. Provision Shuna PKI and Vault (only needed once before first Docker startup if ciel has not run yet):
 ```bash
+export CIEL_WORK_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/ciel_workspace"
 export CIEL_VAULT_PASSPHRASE="your-strong-vault-passphrase"
-./scripts/init_pg.sh
+./bin/shuna init-pki --out "$CIEL_WORK_DIR/pki" --hosts 127.0.0.1,localhost --pg-hosts postgres,127.0.0.1,localhost
+./bin/shuna keygen --out "$CIEL_WORK_DIR/vault" --passphrase-env CIEL_VAULT_PASSPHRASE
 ```
 
 2. Start PostgreSQL 16 with ssl=on, scram-sha-256, and hostssl enforcement:
