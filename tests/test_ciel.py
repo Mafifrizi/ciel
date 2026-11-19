@@ -596,7 +596,10 @@ def main():
 def run_pg16_e2e_test():
     initdb_bin = "/usr/lib/postgresql/16/bin/initdb"
     pg_bin = "/usr/lib/postgresql/16/bin/postgres"
-    if not (Path(initdb_bin).exists() and Path(pg_bin).exists()) or os.geteuid() == 0:
+    if not (Path(initdb_bin).exists() and Path(pg_bin).exists()):
+        initdb_bin = shutil.which("initdb") or ""
+        pg_bin = shutil.which("postgres") or ""
+    if not (initdb_bin and pg_bin and Path(initdb_bin).exists() and Path(pg_bin).exists()) or os.geteuid() == 0:
         print("[SKIP] PostgreSQL 16 unprivileged E2E test (binaries missing or running as root)")
         return
 
