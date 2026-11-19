@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build & Verify Ciel Stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: teamserver/go.sum
+
+      - name: Install Build & PostgreSQL 16 Dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            qt6-base-dev \
+            libssl-dev \
+            postgresql-16 \
+            postgresql-client-16
+
+      - name: Build Tempest, Shuna, Teamserver, and Qt6 Client
+        run: make all
+
+      - name: Run Go Vet & Race Test Suite (PostgreSQL 16 TLS + PQC mTLS)
+        run: |
+          cd teamserver
+          go vet ./...
+          go test -race -count=1 -v ./...
+
+      - name: Verify Bundled CLI Binaries & Docker Compose Config
+        run: |
+          ./bin/shuna --help >/dev/null
+          ./bin/tanuki --help >/dev/null
+          POSTGRES_PASSWORD=ci-check docker compose -f deploy/docker-compose.yml config -q

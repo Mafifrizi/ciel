@@ -1,0 +1,68 @@
+name: Bug Report
+description: Report a crash, mTLS/vault error, or UI defect in Ciel
+title: "fix: [short description of the issue]"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue. Provide exact reproduction details below so maintainers can diagnose and fix it cleanly.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which layer of Ciel did you experience this issue in?
+      options:
+        - Desktop Client (C++20 Qt6)
+        - Teamserver (Go mTLS 1.3 RPC)
+        - PostgreSQL 16 Fleet Storage / Shuna Vault
+        - Tempest Operatives (souei, chronoa, ranga)
+        - Tanuki Module Integration
+        - Build / Docker Deployment
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Operating System and Toolchain
+      description: e.g., Kali Linux Rolling x86_64, Go 1.24+, OpenSSL 3.5+, Qt 6.8, PostgreSQL 16
+      placeholder: "Kali Linux x86_64, Go 1.24, OpenSSL 3.5, Qt 6.8"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or Action Executed
+      description: Exact launch flags, console command, or UI action taken.
+      placeholder: "./bin/ciel-teamserver --addr 127.0.0.1:40056"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual Behavior and Error Output
+      description: Include terminal logs, Event Viewer lines, or semantic exit codes (0..4).
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation Checklist
+      options:
+        - label: I verified that no vault passphrases, auth tokens, private keys, or production keytabs are included in this report.
+          required: true
+        - label: I checked existing issues to make sure this is not a duplicate.
+          required: true

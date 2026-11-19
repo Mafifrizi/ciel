@@ -1,0 +1,47 @@
+name: Feature Proposal
+description: Propose a new desktop capability, telemetry view, or fleet storage feature for Ciel
+title: "feat: [short summary of feature]"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals for new Ciel console capabilities, visualization improvements, and secure fleet operations are welcome.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What operational or diagnostic workflow gap does this address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the UI, teamserver RPC, or storage behavior you have in mind.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Target Layer
+      options:
+        - Desktop Client (Qt6)
+        - Teamserver & PostgreSQL Storage
+        - Both Client and Teamserver
+        - Deployment / Packaging
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: compliance
+    attributes:
+      label: Architectural Alignment
+      options:
+        - label: Sensitive host, principal, path, and audit metadata remain encrypted via Shuna AEAD before hitting PostgreSQL or disk.
+          required: true
+        - label: No synthetic demo artifacts or weakened TLS/mTLS defaults are introduced into production paths.
+          required: true
