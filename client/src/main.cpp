@@ -28,7 +28,6 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
-#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -50,6 +49,7 @@
 #include <QPushButton>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -62,6 +62,7 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStyle>
 #include <QStyleOptionGraphicsItem>
 #include <QSysInfo>
 #include <QTabWidget>
@@ -86,75 +87,160 @@
 
 namespace {
 
+QFont resolveUiFont(qreal ptSize, QFont::Weight weight = QFont::Normal) {
+    static const QString resolvedFamily = []() -> QString {
+        const QStringList installed = QFontDatabase::families();
+        const QStringList preferred = {
+            QStringLiteral("Inter"),
+            QStringLiteral("Segoe UI"),
+            QStringLiteral("Noto Sans"),
+            QStringLiteral("Ubuntu"),
+            QStringLiteral("Cantarell"),
+            QStringLiteral("DejaVu Sans")
+        };
+        for (const QString &fam : preferred) {
+            if (installed.contains(fam, Qt::CaseInsensitive)) {
+                return fam;
+            }
+        }
+        return QStringLiteral("DejaVu Sans");
+    }();
+    QFont f(resolvedFamily);
+    f.setPointSizeF(ptSize);
+    f.setWeight(weight);
+    f.setStyleHint(QFont::SansSerif);
+    return f;
+}
+
+QFont resolveMonoFont(qreal ptSize, QFont::Weight weight = QFont::Normal) {
+    static const QString resolvedFamily = []() -> QString {
+        const QStringList installed = QFontDatabase::families();
+        const QStringList preferred = {
+            QStringLiteral("JetBrains Mono"),
+            QStringLiteral("Cascadia Mono"),
+            QStringLiteral("DejaVu Sans Mono"),
+            QStringLiteral("Noto Sans Mono"),
+            QStringLiteral("Liberation Mono")
+        };
+        for (const QString &fam : preferred) {
+            if (installed.contains(fam, Qt::CaseInsensitive)) {
+                return fam;
+            }
+        }
+        return QStringLiteral("DejaVu Sans Mono");
+    }();
+    QFont f(resolvedFamily);
+    f.setPointSizeF(ptSize);
+    f.setWeight(weight);
+    f.setStyleHint(QFont::Monospace);
+    f.setFixedPitch(true);
+    return f;
+}
+
 QString applyCielStylesheet() {
     return QStringLiteral(R"(
-        QMainWindow#CielMainWindow, QDialog#ModuleModal, QDialog, QMessageBox, QInputDialog, QFileDialog {
-            background-color: #111318;
-            color: #F3F4F6;
+        QMainWindow#CielMainWindow, QWidget#RootCanvas, QStackedWidget#WorkspaceStack {
+            background-color: #17181D;
+            color: #E6E8EE;
         }
 
-        QWidget#RootCanvas, QStackedWidget#WorkspaceStack {
-            background-color: #111318;
-            color: #F3F4F6;
+        QDialog#ModuleModal, QDialog, QMessageBox, QInputDialog, QFileDialog {
+            background-color: #1F2027;
+            color: #E6E8EE;
         }
 
         QWidget#LeftRail {
-            background-color: #181B22;
-            border-right: 1px solid #2B303C;
+            background-color: #1F2027;
+            border-right: 1px solid #2F3440;
+        }
+
+        QLabel#RailBrandMark {
+            background-color: transparent;
+            border: none;
         }
 
         QWidget#TopKpiBar {
-            background-color: #181B22;
-            border-bottom: 1px solid #2B303C;
+            background-color: #1F2027;
+            border-bottom: 1px solid #2F3440;
         }
 
         QWidget#VaultBanner {
-            background-color: #2A161B;
-            border: 1px solid #EF4444;
-            border-radius: 3px;
+            background-color: #2A191E;
+            border: 1px solid #7B4A51;
+            border-radius: 4px;
         }
 
         QWidget#InspectorDrawer {
-            background-color: #181B22;
-            border-left: 1px solid #2B303C;
+            background-color: #1F2027;
+            border-left: 1px solid #2F3440;
         }
 
         QWidget#InspectorHeader {
-            background-color: #20242E;
-            border-bottom: 1px solid #2B303C;
+            background-color: #282B33;
+            border-bottom: 1px solid #2F3440;
         }
 
         QWidget#ConsolePanel, QWidget#ModulesPanel, QWidget#FleetPanel, QWidget#VaultPanel, QWidget#TargetsPanel {
-            background-color: #181B22;
-            color: #F3F4F6;
+            background-color: #1F2027;
+            color: #E6E8EE;
+        }
+
+        QScrollArea#ModulesScrollArea, QWidget#ModulesScrollViewport {
+            background-color: #1F2027;
+            border: none;
         }
 
         QWidget#ModuleCard, QWidget#VaultCard, QWidget#PkiCard {
-            background-color: #20242E;
-            border: 1px solid #2B303C;
+            background-color: #282B33;
+            border: 1px solid #2F3440;
             border-radius: 4px;
         }
 
         QWidget#StatusBarStrip {
-            background-color: #181B22;
-            border-top: 1px solid #2B303C;
+            background-color: #1F2027;
+            border-top: 1px solid #2F3440;
         }
 
         QLabel {
             background-color: transparent;
-            color: #F3F4F6;
+            color: #E6E8EE;
         }
 
         QLabel#MutedLabel, QLabel#StatusStripItem {
-            color: #8B949E;
+            color: #9CA3B2;
         }
 
-        QLabel#KpiBadge {
+        QLabel#StatusStripItem[rpcActive="true"] {
+            color: #8AB4F8;
+            font-weight: bold;
+        }
+
+        QLabel#EmptyStateLabel {
             background-color: #20242E;
-            color: #F3F4F6;
-            border: 1px solid #2B303C;
-            border-radius: 3px;
-            padding: 2px 8px;
+            color: #9CA3B2;
+            border: 1px solid #3A3F4B;
+            border-radius: 4px;
+            padding: 8px 12px;
+        }
+        QLabel#EmptyStateLabel[alertState="locked"] {
+            background-color: #2A191E;
+            color: #FCA5A5;
+            border: 1px solid #7B4A51;
+        }
+
+        QLabel#InlineErrorLabel {
+            color: #FA8080;
+            font-weight: bold;
+        }
+
+        QWidget#KpiBadge {
+            background-color: #282B33;
+            border: 1px solid #2F3440;
+            border-radius: 4px;
+        }
+        QLabel#KpiBadgeText {
+            background-color: transparent;
+            color: #E6E8EE;
             font-weight: bold;
         }
 
@@ -163,241 +249,367 @@ QString applyCielStylesheet() {
             font-weight: bold;
         }
 
+        QToolTip {
+            background-color: #282B33;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
+            padding: 4px 8px;
+        }
+
         QSplitter::handle {
-            background-color: #2B303C;
+            background-color: #2F3440;
         }
 
         QMenuBar {
-            background-color: #181B22;
-            color: #F3F4F6;
-            border-bottom: 1px solid #2B303C;
+            background-color: #1F2027;
+            color: #E6E8EE;
+            border-bottom: 1px solid #2F3440;
         }
         QMenuBar::item {
             background-color: transparent;
-            color: #F3F4F6;
+            color: #E6E8EE;
             padding: 4px 10px;
         }
         QMenuBar::item:selected {
-            background-color: #20242E;
-            color: #60A5FA;
+            background-color: #282B33;
+            color: #8AB4F8;
         }
         QMenuBar::item:pressed {
-            background-color: #2B303C;
+            background-color: #313540;
         }
 
         QMenu {
-            background-color: #181B22;
-            color: #F3F4F6;
-            border: 1px solid #2B303C;
+            background-color: #1F2027;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
         }
         QMenu::item {
             padding: 5px 22px 5px 12px;
         }
         QMenu::item:selected {
-            background-color: #20242E;
-            color: #60A5FA;
+            background-color: #313540;
+            color: #8AB4F8;
         }
         QMenu::separator {
             height: 1px;
-            background-color: #2B303C;
+            background-color: #2F3440;
             margin: 3px 6px;
         }
 
         QTabWidget::pane {
-            background-color: #181B22;
-            border: 1px solid #2B303C;
+            background-color: #1F2027;
+            border: 1px solid #2F3440;
         }
         QTabBar::tab {
-            background-color: #181B22;
-            color: #9CA3AF;
-            border: 1px solid #2B303C;
+            background-color: #1F2027;
+            color: #9CA3B2;
+            border: 1px solid #2F3440;
             border-bottom: none;
             padding: 5px 14px;
             margin-right: 2px;
         }
+        QTabBar::tab:hover {
+            background-color: #282B33;
+            color: #E6E8EE;
+        }
         QTabBar::tab:selected {
-            background-color: #20242E;
-            color: #F3F4F6;
-            border-top: 2px solid #3B82F6;
+            background-color: #282B33;
+            color: #E6E8EE;
+            border-top: 2px solid #5B8DEF;
+        }
+        QTabBar::tab:focus {
+            border: 1px solid #5B8DEF;
+            border-bottom: none;
         }
 
         QTableWidget {
-            background-color: #181B22;
-            color: #F3F4F6;
-            border: 1px solid #2B303C;
-            gridline-color: #20242E;
-            selection-background-color: #1E3A8A;
+            background-color: #1F2027;
+            color: #E6E8EE;
+            border: 1px solid #2F3440;
+            gridline-color: #262933;
+            selection-background-color: #2C364A;
             selection-color: #F3F4F6;
         }
         QTableWidget:focus {
-            border: 1px solid #3B82F6;
+            border: 1px solid #5B8DEF;
+        }
+        QTableWidget::item {
+            border-bottom: 1px solid #262933;
+            padding: 2px 6px;
         }
         QTableWidget::item:selected {
-            background-color: #1E3A8A;
+            background-color: #2C364A;
             color: #F3F4F6;
         }
         QHeaderView::section {
-            background-color: #20242E;
-            color: #F3F4F6;
+            background-color: #282B33;
+            color: #E6E8EE;
             border: none;
-            border-bottom: 1px solid #2B303C;
-            border-right: 1px solid #2B303C;
+            border-bottom: 1px solid #2F3440;
+            border-right: 1px solid #2F3440;
             padding: 4px 8px;
             font-weight: bold;
         }
 
         QTextEdit, QPlainTextEdit, QGraphicsView {
-            background-color: #181B22;
-            color: #F3F4F6;
+            background-color: #17181D;
+            color: #E6E8EE;
             border: none;
         }
         QTextEdit:focus, QPlainTextEdit:focus {
-            border: 1px solid #3B82F6;
+            border: 1px solid #5B8DEF;
         }
 
         QLineEdit, QComboBox {
-            background-color: #111318;
-            color: #F3F4F6;
-            border: 1px solid #2B303C;
-            border-radius: 3px;
-            padding: 3px 6px;
+            background-color: #17181D;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
+            border-radius: 4px;
+            padding: 4px 8px;
         }
         QLineEdit:focus, QComboBox:focus {
-            border: 1px solid #3B82F6;
+            border: 1px solid #5B8DEF;
+        }
+        QLineEdit:disabled, QComboBox:disabled {
+            background-color: #1B1D24;
+            color: #8B949E;
+            border-color: #2A2E39;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #1F2027;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
+            selection-background-color: #2C364A;
+            selection-color: #FFFFFF;
         }
 
         QCheckBox {
-            color: #F3F4F6;
+            color: #E6E8EE;
             spacing: 6px;
+        }
+        QCheckBox:focus {
+            color: #FFFFFF;
         }
 
         QLineEdit#OperativeInput {
-            background-color: #181B22;
-            color: #F3F4F6;
+            background-color: #1F2027;
+            color: #E6E8EE;
             border: none;
             border-radius: 0px;
             padding: 3px 4px;
         }
 
         QLabel#SessionBanner {
-            background-color: #20242E;
-            color: #9CA3AF;
-            border-top: 1px solid #2B303C;
-            border-bottom: 1px solid #2B303C;
+            background-color: #282B33;
+            color: #9CA3B2;
+            border-top: 1px solid #2F3440;
+            border-bottom: 1px solid #2F3440;
             padding: 2px 6px;
         }
 
         QLabel#PromptArrow {
-            background-color: #181B22;
-            color: #60A5FA;
+            background-color: #1F2027;
+            color: #8AB4F8;
             padding: 2px 4px 2px 6px;
             font-weight: bold;
         }
 
         QLabel#SectionLabel {
-            color: #60A5FA;
+            color: #8AB4F8;
             font-weight: bold;
             padding-top: 2px;
         }
 
-        QPushButton, QPushButton#PrimaryBtn {
-            background-color: #3B82F6;
-            color: #F3F4F6;
-            border: 1px solid #3B82F6;
-            border-radius: 3px;
-            padding: 4px 10px;
+        QPushButton {
+            background-color: #282B33;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
+            border-radius: 4px;
+            padding: 5px 12px;
+            font-weight: normal;
+            min-height: 22px;
+        }
+        QPushButton:hover {
+            background-color: #313540;
+            border-color: #4D5566;
+            color: #FFFFFF;
+        }
+        QPushButton:pressed {
+            background-color: #1F2027;
+            color: #E6E8EE;
+        }
+        QPushButton:focus {
+            border: 1px solid #5B8DEF;
+        }
+        QPushButton:disabled {
+            background-color: #1B1D24;
+            color: #8B949E;
+            border-color: #2A2E39;
+        }
+
+        QPushButton#PrimaryBtn {
+            background-color: #2E5AAC;
+            color: #FFFFFF;
+            border: 1px solid #4E7EE9;
+            border-radius: 4px;
+            padding: 5px 12px;
             font-weight: bold;
             min-height: 22px;
         }
-        QPushButton:hover, QPushButton#PrimaryBtn:hover {
-            background-color: #2563EB;
-            border-color: #60A5FA;
+        QPushButton#PrimaryBtn:hover {
+            background-color: #3867C2;
+            border-color: #6E9AF4;
             color: #FFFFFF;
         }
-        QPushButton:pressed, QPushButton#PrimaryBtn:pressed {
-            background-color: #1D4ED8;
-            color: #FFFFFF;
+        QPushButton#PrimaryBtn:pressed {
+            background-color: #244A8F;
             border-color: #93C5FD;
+            color: #FFFFFF;
         }
-        QPushButton:focus {
+        QPushButton#PrimaryBtn:focus {
             border: 1px solid #93C5FD;
         }
-        QPushButton:disabled {
-            background-color: #1E222D;
+        QPushButton#PrimaryBtn:disabled {
+            background-color: #1B1D24;
             color: #8B949E;
-            border-color: #2B303C;
+            border-color: #2A2E39;
         }
 
         QPushButton#SecondaryBtn {
-            background-color: #20242E;
-            color: #F3F4F6;
-            border: 1px solid #2B303C;
-            padding: 3px 8px;
+            background-color: #282B33;
+            color: #E6E8EE;
+            border: 1px solid #3A3F4B;
+            border-radius: 4px;
+            padding: 4px 10px;
             font-weight: normal;
+            min-height: 22px;
         }
         QPushButton#SecondaryBtn:hover {
-            background-color: #2B303C;
-            border-color: #3B82F6;
+            background-color: #313540;
+            border-color: #4D5566;
             color: #FFFFFF;
         }
         QPushButton#SecondaryBtn:pressed {
-            background-color: #181B22;
-            color: #F3F4F6;
+            background-color: #1F2027;
+            color: #E6E8EE;
+        }
+        QPushButton#SecondaryBtn:checked {
+            background-color: #2C364A;
+            border-color: #5B8DEF;
+            color: #FFFFFF;
+        }
+        QPushButton#SecondaryBtn:focus {
+            border: 1px solid #5B8DEF;
+        }
+        QPushButton#SecondaryBtn:disabled {
+            background-color: #1B1D24;
+            color: #8B949E;
+            border-color: #2A2E39;
         }
 
         QPushButton#DangerBtn {
-            background-color: #DC2626;
-            color: #FFFFFF;
-            border: 1px solid #EF4444;
+            background-color: #2D1F24;
+            color: #F5D0D5;
+            border: 1px solid #7B4A51;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-weight: normal;
+            min-height: 22px;
         }
         QPushButton#DangerBtn:hover {
-            background-color: #B91C1C;
-            border-color: #FCA5A5;
+            background-color: #3D262D;
+            border-color: #A65C66;
             color: #FFFFFF;
         }
         QPushButton#DangerBtn:pressed {
-            background-color: #991B1B;
-            color: #FFFFFF;
+            background-color: #24171B;
+            border-color: #C77D87;
+            color: #F5D0D5;
+        }
+        QPushButton#DangerBtn:focus {
+            border: 1px solid #5B8DEF;
+        }
+        QPushButton#DangerBtn:disabled {
+            background-color: #1B1D24;
+            color: #8B949E;
+            border-color: #2A2E39;
         }
 
         QPushButton#RailBtn {
             background-color: transparent;
-            color: #8B949E;
+            color: #8E95A5;
             border: none;
             border-left: 3px solid transparent;
             border-radius: 0px;
-            padding: 8px 2px;
-            font-size: 10px;
-            font-weight: bold;
-            min-height: 32px;
+            padding: 0px;
+            min-height: 40px;
         }
         QPushButton#RailBtn:hover {
-            background-color: #20242E;
-            color: #F3F4F6;
+            background-color: #282B33;
+            color: #E6E8EE;
         }
         QPushButton#RailBtn:checked {
-            background-color: #20242E;
-            color: #60A5FA;
-            border-left: 3px solid #3B82F6;
+            background-color: #282B33;
+            color: #E6E8EE;
+            border-left: 3px solid #5B8DEF;
+        }
+        QPushButton#RailBtn:focus {
+            border-top: 1px solid #5B8DEF;
+            border-right: 1px solid #5B8DEF;
+            border-bottom: 1px solid #5B8DEF;
+        }
+        QPushButton#RailBtn:checked:focus {
+            border-top: 1px solid #5B8DEF;
+            border-right: 1px solid #5B8DEF;
+            border-bottom: 1px solid #5B8DEF;
+            border-left: 3px solid #5B8DEF;
+        }
+
+        QWidget#GraphZoomPill {
+            background-color: rgba(31, 32, 39, 235);
+            border: 1px solid #2F3440;
+            border-radius: 6px;
+        }
+        QWidget#GraphZoomPill QPushButton {
+            background-color: transparent;
+            color: #E6E8EE;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            padding: 2px 6px;
+            min-height: 18px;
+            font-weight: bold;
+        }
+        QWidget#GraphZoomPill QPushButton:hover {
+            background-color: #313540;
+            color: #FFFFFF;
+        }
+        QWidget#GraphZoomPill QPushButton:pressed {
+            background-color: #282B33;
+            color: #E6E8EE;
+        }
+        QWidget#GraphZoomPill QPushButton:focus {
+            border: 1px solid #5B8DEF;
         }
 
         QScrollBar:vertical {
-            background: #181B22;
+            background: #17181D;
             width: 10px;
             margin: 0;
         }
         QScrollBar::handle:vertical {
-            background: #2B303C;
+            background: #2F3440;
             min-height: 20px;
+            border-radius: 3px;
         }
         QScrollBar:horizontal {
-            background: #181B22;
+            background: #17181D;
             height: 10px;
             margin: 0;
         }
         QScrollBar::handle:horizontal {
-            background: #2B303C;
+            background: #2F3440;
             min-width: 20px;
+            border-radius: 3px;
         }
         QScrollBar::add-line, QScrollBar::sub-line {
             width: 0px;
@@ -406,29 +618,382 @@ QString applyCielStylesheet() {
     )");
 }
 
-QIcon makeOperativeBadgeIcon(const QColor &accent, bool isHub = false) {
-    QPixmap pm(18, 18);
+enum class CielIconKind {
+    BrandMark,
+    RailOps,
+    RailModules,
+    RailFleet,
+    RailVault,
+    RailSettings,
+    TableGrid,
+    GraphNodes,
+    InspectorPane,
+    SyncRefresh,
+    ConsolePrompt,
+    EventPulse,
+    SummaryList,
+    RawJsonBraces,
+    TeamserverHub,
+    CloseCross,
+    SlidersOptions,
+    VaultAlertLock,
+    LockClosed,
+    LockOpen,
+    KeyCredential,
+    ArchiveExport,
+    CertRevoke,
+    FolderAmber,
+    SocketPlug,
+    ShieldCheck,
+    OperativeChip,
+    StatusDot
+};
+
+QPixmap makeCielPixmap(CielIconKind kind, const QColor &color, int size = 20) {
+    const int px = qMax(10, size) * 2;
+    QPixmap pm(px, px);
     pm.fill(Qt::transparent);
+    pm.setDevicePixelRatio(2.0);
+
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
+    const qreal scale = static_cast<qreal>(qMax(10, size)) / 24.0;
+    p.scale(scale, scale);
 
-    if (isHub) {
-        p.setPen(QPen(accent, 1.5));
-        p.setBrush(QColor("#20242E"));
-        p.drawRect(2, 3, 14, 12);
-        p.drawLine(2, 7, 16, 7);
-    } else {
-        p.setPen(QPen(accent, 1.4));
-        p.setBrush(QColor("#111318"));
-        p.drawRect(2, 2, 14, 10);
-        p.drawLine(6, 15, 12, 15);
-        p.drawLine(9, 12, 9, 15);
-        p.setPen(accent);
-        p.drawLine(5, 6, 7, 7);
-        p.drawLine(7, 7, 5, 8);
-        p.drawLine(9, 8, 12, 8);
+    const qreal targetLogicalStroke = (size <= 14) ? 1.35 : 1.60;
+    const qreal penW = targetLogicalStroke / scale;
+    const QPen strokePen(color, penW, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(strokePen);
+    p.setBrush(Qt::NoBrush);
+
+    switch (kind) {
+        case CielIconKind::BrandMark: {
+            QPainterPath frame;
+            frame.moveTo(17.5, 6.2);
+            frame.lineTo(12.0, 3.2);
+            frame.lineTo(5.2, 7.0);
+            frame.lineTo(5.2, 17.0);
+            frame.lineTo(12.0, 20.8);
+            frame.lineTo(17.5, 17.8);
+            p.drawPath(frame);
+
+            p.drawLine(QPointF(9.4, 8.8), QPointF(9.4, 15.2));
+            p.drawLine(QPointF(13.2, 9.2), QPointF(18.2, 12.0));
+            p.drawLine(QPointF(18.2, 12.0), QPointF(13.2, 14.8));
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor("#5B8DEF"));
+            p.drawEllipse(QPointF(18.4, 12.0), 1.6, 1.6);
+            break;
+        }
+        case CielIconKind::RailOps: {
+            p.drawLine(QPointF(6.2, 16.8), QPointF(10.4, 10.8));
+            p.drawLine(QPointF(10.4, 10.8), QPointF(14.8, 15.0));
+            p.drawLine(QPointF(14.8, 15.0), QPointF(18.4, 7.2));
+            p.setBrush(QColor("#1F2027"));
+            p.drawEllipse(QPointF(6.2, 16.8), 2.1, 2.1);
+            p.drawEllipse(QPointF(10.4, 10.8), 2.1, 2.1);
+            p.drawEllipse(QPointF(14.8, 15.0), 2.1, 2.1);
+            p.drawEllipse(QPointF(18.4, 7.2), 2.1, 2.1);
+            break;
+        }
+        case CielIconKind::RailModules: {
+            p.drawRoundedRect(QRectF(4.2, 4.2, 6.4, 6.4), 1.5, 1.5);
+            p.drawRoundedRect(QRectF(13.4, 4.2, 6.4, 6.4), 1.5, 1.5);
+            p.drawRoundedRect(QRectF(4.2, 13.4, 6.4, 6.4), 1.5, 1.5);
+            p.drawRoundedRect(QRectF(13.4, 13.4, 6.4, 6.4), 1.5, 1.5);
+            break;
+        }
+        case CielIconKind::RailFleet: {
+            p.drawRoundedRect(QRectF(4.0, 4.0, 16.0, 4.4), 1.2, 1.2);
+            p.drawRoundedRect(QRectF(4.0, 9.8, 16.0, 4.4), 1.2, 1.2);
+            p.drawRoundedRect(QRectF(4.0, 15.6, 16.0, 4.4), 1.2, 1.2);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(6.6, 6.2), 0.95, 0.95);
+            p.drawEllipse(QPointF(6.6, 12.0), 0.95, 0.95);
+            p.drawEllipse(QPointF(6.6, 17.8), 0.95, 0.95);
+            break;
+        }
+        case CielIconKind::RailVault: {
+            QPainterPath shield;
+            shield.moveTo(12.0, 3.2);
+            shield.lineTo(19.0, 6.2);
+            shield.lineTo(18.4, 12.6);
+            shield.quadTo(15.6, 18.2, 12.0, 20.6);
+            shield.quadTo(8.4, 18.2, 5.6, 12.6);
+            shield.lineTo(5.0, 6.2);
+            shield.closeSubpath();
+            p.drawPath(shield);
+            p.drawArc(QRectF(9.6, 7.8, 4.8, 4.8), 0, 180 * 16);
+            p.drawRoundedRect(QRectF(8.8, 10.8, 6.4, 4.8), 1.0, 1.0);
+            break;
+        }
+        case CielIconKind::RailSettings: {
+            QPainterPath gear;
+            const QPointF c(12.0, 12.0);
+            const qreal rOuter = 9.3;
+            const qreal rInner = 6.9;
+            const int teeth = 8;
+            const qreal step = (2.0 * std::numbers::pi) / teeth;
+            for (int i = 0; i < teeth; ++i) {
+                const qreal a0 = step * i;
+                const QPointF p0(c.x() + rInner * std::cos(a0 - 0.14), c.y() + rInner * std::sin(a0 - 0.14));
+                const QPointF p1(c.x() + rOuter * std::cos(a0 - 0.08), c.y() + rOuter * std::sin(a0 - 0.08));
+                const QPointF p2(c.x() + rOuter * std::cos(a0 + 0.08), c.y() + rOuter * std::sin(a0 + 0.08));
+                const QPointF p3(c.x() + rInner * std::cos(a0 + 0.14), c.y() + rInner * std::sin(a0 + 0.14));
+                const qreal midNext = a0 + step * 0.5;
+                const QPointF p4(c.x() + rInner * std::cos(midNext), c.y() + rInner * std::sin(midNext));
+                if (i == 0) {
+                    gear.moveTo(p0);
+                } else {
+                    gear.lineTo(p0);
+                }
+                gear.lineTo(p1);
+                gear.lineTo(p2);
+                gear.lineTo(p3);
+                gear.lineTo(p4);
+            }
+            gear.closeSubpath();
+            p.drawPath(gear);
+            p.drawEllipse(c, 2.7, 2.7);
+            break;
+        }
+        case CielIconKind::TableGrid: {
+            p.drawRoundedRect(QRectF(3.5, 4.5, 17.0, 15.0), 1.8, 1.8);
+            p.drawLine(QPointF(3.5, 9.5), QPointF(20.5, 9.5));
+            p.drawLine(QPointF(3.5, 14.5), QPointF(20.5, 14.5));
+            p.drawLine(QPointF(9.5, 9.5), QPointF(9.5, 19.5));
+            break;
+        }
+        case CielIconKind::GraphNodes: {
+            p.drawLine(QPointF(7.4, 11.1), QPointF(16.0, 7.2));
+            p.drawLine(QPointF(7.4, 12.9), QPointF(16.0, 16.8));
+            p.drawEllipse(QPointF(5.5, 12.0), 2.2, 2.2);
+            p.drawEllipse(QPointF(18.0, 6.5), 2.2, 2.2);
+            p.drawEllipse(QPointF(18.0, 17.5), 2.2, 2.2);
+            break;
+        }
+        case CielIconKind::InspectorPane: {
+            p.drawRoundedRect(QRectF(3.5, 4.5, 17.0, 15.0), 1.8, 1.8);
+            p.drawLine(QPointF(13.8, 4.5), QPointF(13.8, 19.5));
+            p.drawLine(QPointF(16.0, 8.5), QPointF(18.4, 8.5));
+            p.drawLine(QPointF(16.0, 12.0), QPointF(18.4, 12.0));
+            break;
+        }
+        case CielIconKind::SyncRefresh: {
+            const QRectF arcRect(4.5, 4.5, 15.0, 15.0);
+            p.drawArc(arcRect, 35 * 16, 140 * 16);
+            p.drawArc(arcRect, 215 * 16, 140 * 16);
+            p.drawLine(QPointF(15.0, 7.3), QPointF(18.1, 7.7));
+            p.drawLine(QPointF(18.1, 7.7), QPointF(18.0, 4.5));
+            p.drawLine(QPointF(9.0, 16.7), QPointF(5.9, 16.3));
+            p.drawLine(QPointF(5.9, 16.3), QPointF(6.0, 19.5));
+            break;
+        }
+        case CielIconKind::ConsolePrompt: {
+            p.drawRoundedRect(QRectF(3.0, 4.5, 18.0, 15.0), 2.0, 2.0);
+            p.drawLine(QPointF(6.8, 9.0), QPointF(10.5, 12.0));
+            p.drawLine(QPointF(10.5, 12.0), QPointF(6.8, 15.0));
+            p.drawLine(QPointF(12.5, 15.0), QPointF(17.2, 15.0));
+            break;
+        }
+        case CielIconKind::EventPulse: {
+            QPainterPath pulse;
+            pulse.moveTo(3.0, 12.5);
+            pulse.lineTo(7.0, 12.5);
+            pulse.lineTo(9.5, 6.0);
+            pulse.lineTo(13.0, 18.0);
+            pulse.lineTo(15.8, 10.0);
+            pulse.lineTo(17.5, 12.5);
+            pulse.lineTo(21.0, 12.5);
+            p.drawPath(pulse);
+            break;
+        }
+        case CielIconKind::SummaryList: {
+            p.drawLine(QPointF(8.5, 7.0), QPointF(19.5, 7.0));
+            p.drawLine(QPointF(8.5, 12.0), QPointF(19.5, 12.0));
+            p.drawLine(QPointF(8.5, 17.0), QPointF(16.5, 17.0));
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(5.0, 7.0), 1.1, 1.1);
+            p.drawEllipse(QPointF(5.0, 12.0), 1.1, 1.1);
+            p.drawEllipse(QPointF(5.0, 17.0), 1.1, 1.1);
+            break;
+        }
+        case CielIconKind::RawJsonBraces: {
+            QPainterPath lb;
+            lb.moveTo(9.5, 4.8);
+            lb.quadTo(7.2, 4.8, 7.2, 7.2);
+            lb.lineTo(7.2, 10.0);
+            lb.quadTo(7.2, 11.8, 5.2, 12.0);
+            lb.quadTo(7.2, 12.2, 7.2, 14.0);
+            lb.lineTo(7.2, 16.8);
+            lb.quadTo(7.2, 19.2, 9.5, 19.2);
+            p.drawPath(lb);
+            QPainterPath rb;
+            rb.moveTo(14.5, 4.8);
+            rb.quadTo(16.8, 4.8, 16.8, 7.2);
+            rb.lineTo(16.8, 10.0);
+            rb.quadTo(16.8, 11.8, 18.8, 12.0);
+            rb.quadTo(16.8, 12.2, 16.8, 14.0);
+            rb.lineTo(16.8, 16.8);
+            rb.quadTo(16.8, 19.2, 14.5, 19.2);
+            p.drawPath(rb);
+            break;
+        }
+        case CielIconKind::TeamserverHub: {
+            p.drawRoundedRect(QRectF(4.5, 4.2, 15.0, 6.6), 1.5, 1.5);
+            p.drawRoundedRect(QRectF(4.5, 13.2, 15.0, 6.6), 1.5, 1.5);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(7.6, 7.5), 1.0, 1.0);
+            p.drawEllipse(QPointF(7.6, 16.5), 1.0, 1.0);
+            break;
+        }
+        case CielIconKind::CloseCross: {
+            p.drawLine(QPointF(6.5, 6.5), QPointF(17.5, 17.5));
+            p.drawLine(QPointF(17.5, 6.5), QPointF(6.5, 17.5));
+            break;
+        }
+        case CielIconKind::SlidersOptions: {
+            p.drawLine(QPointF(4.0, 8.0), QPointF(7.5, 8.0));
+            p.drawLine(QPointF(11.5, 8.0), QPointF(20.0, 8.0));
+            p.drawEllipse(QPointF(9.5, 8.0), 2.0, 2.0);
+            p.drawLine(QPointF(4.0, 16.0), QPointF(12.5, 16.0));
+            p.drawLine(QPointF(16.5, 16.0), QPointF(20.0, 16.0));
+            p.drawEllipse(QPointF(14.5, 16.0), 2.0, 2.0);
+            break;
+        }
+        case CielIconKind::VaultAlertLock: {
+            QPainterPath tri;
+            tri.moveTo(12.0, 3.8);
+            tri.lineTo(20.5, 19.2);
+            tri.lineTo(3.5, 19.2);
+            tri.closeSubpath();
+            p.drawPath(tri);
+            p.drawLine(QPointF(12.0, 9.6), QPointF(12.0, 14.0));
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(12.0, 16.6), 1.05, 1.05);
+            break;
+        }
+        case CielIconKind::LockClosed: {
+            p.drawArc(QRectF(8.0, 4.4, 8.0, 7.6), 0, 180 * 16);
+            p.drawRoundedRect(QRectF(5.5, 10.5, 13.0, 9.2), 1.8, 1.8);
+            p.drawLine(QPointF(12.0, 14.0), QPointF(12.0, 16.2));
+            break;
+        }
+        case CielIconKind::LockOpen: {
+            QPainterPath shackle;
+            shackle.moveTo(8.2, 10.5);
+            shackle.lineTo(8.2, 7.8);
+            shackle.arcTo(QRectF(8.2, 4.2, 7.6, 7.2), 180.0, -150.0);
+            p.drawPath(shackle);
+            p.drawRoundedRect(QRectF(5.5, 10.5, 13.0, 9.2), 1.8, 1.8);
+            p.drawLine(QPointF(12.0, 14.0), QPointF(12.0, 16.2));
+            break;
+        }
+        case CielIconKind::KeyCredential: {
+            p.drawEllipse(QPointF(7.8, 12.0), 3.6, 3.6);
+            p.drawLine(QPointF(11.4, 12.0), QPointF(20.2, 12.0));
+            p.drawLine(QPointF(16.6, 12.0), QPointF(16.6, 15.4));
+            p.drawLine(QPointF(19.6, 12.0), QPointF(19.6, 14.8));
+            break;
+        }
+        case CielIconKind::ArchiveExport: {
+            QPainterPath tray;
+            tray.moveTo(4.5, 14.5);
+            tray.lineTo(4.5, 19.0);
+            tray.lineTo(19.5, 19.0);
+            tray.lineTo(19.5, 14.5);
+            p.drawPath(tray);
+            p.drawLine(QPointF(12.0, 14.5), QPointF(12.0, 4.8));
+            p.drawLine(QPointF(8.5, 8.2), QPointF(12.0, 4.8));
+            p.drawLine(QPointF(12.0, 4.8), QPointF(15.5, 8.2));
+            break;
+        }
+        case CielIconKind::CertRevoke: {
+            p.drawEllipse(QPointF(12.0, 12.0), 7.8, 7.8);
+            p.drawLine(QPointF(6.5, 6.5), QPointF(17.5, 17.5));
+            break;
+        }
+        case CielIconKind::FolderAmber: {
+            QPainterPath folder;
+            folder.moveTo(3.5, 6.2);
+            folder.lineTo(9.4, 6.2);
+            folder.lineTo(11.3, 8.3);
+            folder.lineTo(20.5, 8.3);
+            folder.lineTo(20.5, 18.4);
+            folder.lineTo(3.5, 18.4);
+            folder.closeSubpath();
+            p.setBrush(QColor(color.red(), color.green(), color.blue(), 185));
+            p.setPen(QPen(color, penW * 0.85, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p.drawPath(folder);
+            break;
+        }
+        case CielIconKind::SocketPlug: {
+            p.drawLine(QPointF(10.0, 4.4), QPointF(10.0, 8.4));
+            p.drawLine(QPointF(14.0, 4.4), QPointF(14.0, 8.4));
+            p.drawRoundedRect(QRectF(7.8, 8.4, 8.4, 6.4), 1.4, 1.4);
+            p.drawLine(QPointF(12.0, 14.8), QPointF(12.0, 19.6));
+            break;
+        }
+        case CielIconKind::ShieldCheck: {
+            QPainterPath shield;
+            shield.moveTo(12.0, 3.2);
+            shield.lineTo(19.0, 6.2);
+            shield.lineTo(18.4, 12.6);
+            shield.quadTo(15.6, 18.2, 12.0, 20.6);
+            shield.quadTo(8.4, 18.2, 5.6, 12.6);
+            shield.lineTo(5.0, 6.2);
+            shield.closeSubpath();
+            p.drawPath(shield);
+            p.drawLine(QPointF(8.6, 12.2), QPointF(11.0, 14.6));
+            p.drawLine(QPointF(11.0, 14.6), QPointF(15.8, 9.4));
+            break;
+        }
+        case CielIconKind::OperativeChip: {
+            p.setBrush(QColor("#17181D"));
+            p.drawRoundedRect(QRectF(3.5, 4.0, 17.0, 11.4), 1.8, 1.8);
+            p.setBrush(Qt::NoBrush);
+            p.drawLine(QPointF(12.0, 15.4), QPointF(12.0, 18.8));
+            p.drawLine(QPointF(8.0, 18.8), QPointF(16.0, 18.8));
+            p.drawLine(QPointF(6.8, 8.0), QPointF(9.6, 9.8));
+            p.drawLine(QPointF(9.6, 9.8), QPointF(6.8, 11.6));
+            p.drawLine(QPointF(11.6, 11.6), QPointF(15.4, 11.6));
+            break;
+        }
+        case CielIconKind::StatusDot: {
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(color.red(), color.green(), color.blue(), 85));
+            p.drawEllipse(QPointF(12.0, 12.0), 6.2, 6.2);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(12.0, 12.0), 3.4, 3.4);
+            break;
+        }
     }
-    return QIcon(pm);
+    return pm;
+}
+
+QIcon makeCielIcon(CielIconKind kind,
+                   const QColor &normalColor,
+                   const QColor &activeColor = QColor(),
+                   int size = 20) {
+    QIcon icon;
+    const QPixmap pmNormal = makeCielPixmap(kind, normalColor, size);
+    icon.addPixmap(pmNormal, QIcon::Normal, QIcon::Off);
+    icon.addPixmap(pmNormal, QIcon::Active, QIcon::Off);
+
+    if (activeColor.isValid()) {
+        const QPixmap pmOn = makeCielPixmap(kind, activeColor, size);
+        icon.addPixmap(pmOn, QIcon::Normal, QIcon::On);
+        icon.addPixmap(pmOn, QIcon::Active, QIcon::On);
+    }
+
+    QColor disabledCol = normalColor;
+    disabledCol.setAlphaF(0.42);
+    icon.addPixmap(makeCielPixmap(kind, disabledCol, size), QIcon::Disabled, QIcon::Off);
+    return icon;
 }
 
 QColor cielStatusColor(const QString &status) {
@@ -440,26 +1005,26 @@ QColor cielStatusColor(const QString &status) {
         status == "CLEAN" || status == "DRY_RUN" || status == "LOW" ||
         status == "EXTRACTED" || status == "UNLOCKED" || status == "ROTATED" ||
         status == "ISSUED" || status == "EXPORTED" || status == "SAVED") {
-        return QColor("#10B981");
+        return QColor("#34D399");
     }
     if (status == "REVOKED") {
-        return QColor("#9CA3AF");
+        return QColor("#9CA3B2");
     }
     if (status == "EXPIRING_SOON" || status == "SHARED_KEYRING" ||
         status == "ATTENTION" || status == "WARN" || status == "MEDIUM" ||
         status == "MODERATE" || status == "FINDINGS" || status == "HIGH" ||
         status == "MISSING" || status == "NO_CREDENTIALS" || status == "RESOURCE_MISSING" ||
         status == "N_A" || status == "PENDING" || status == "ROTATING") {
-        return QColor("#F59E0B");
+        return QColor("#FBBF24");
     }
-    return QColor("#EF4444");
+    return QColor("#FA8080");
 }
 
 inline QColor draculaStatusColor(const QString &status) {
     return cielStatusColor(status);
 }
 
-QString formatDotLeader(const QString &key, const QString &val, int width = 22) {
+QString formatDotLeader(const QString &key, const QString &val, int width = 26) {
     const int dots = qMax(2, width - static_cast<int>(key.size()));
     return key + QString(dots, QChar('.')) + ": " + (val.isEmpty() ? QStringLiteral("-") : val);
 }
@@ -630,8 +1195,8 @@ public:
         setCacheMode(DeviceCoordinateCache);
         setZValue(1.0);
 
-        const QFont f1("DejaVu Sans Mono", 10, QFont::Bold);
-        const QFont f2("DejaVu Sans Mono", 9, QFont::Bold);
+        const QFont f1 = resolveUiFont(9.5, QFont::Bold);
+        const QFont f2 = resolveMonoFont(8.5, QFont::Bold);
         const QFontMetrics fm1(f1);
         const QFontMetrics fm2(f2);
         const qreal textW = qMax(fm1.horizontalAdvance(m_line1), fm2.horizontalAdvance(m_line2));
@@ -692,21 +1257,21 @@ public:
         }
         painter->setOpacity(1.0);
 
-        QFont f1("DejaVu Sans Mono", 10, QFont::Bold);
-        QFont f2("DejaVu Sans Mono", 9, QFont::Bold);
+        const QFont f1 = resolveUiFont(9.5, QFont::Bold);
+        const QFont f2 = resolveMonoFont(8.5, QFont::Bold);
         const QFontMetrics fm2(f2);
         const qreal cardW = m_cardW;
 
         painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor(9, 10, 14, 140));
+        painter->setBrush(QColor(9, 10, 14, 130));
         painter->drawRoundedRect(QRectF(-cardW * 0.5 + 2.0, 43.0, cardW, 36.0), 5.0, 5.0);
 
-        painter->setPen(QPen(QColor("#2B303C"), 1.0));
-        painter->setBrush(QColor(24, 27, 34, 235));
+        painter->setPen(QPen(QColor("#2F3440"), 1.0));
+        painter->setBrush(QColor(31, 32, 39, 240));
         painter->drawRoundedRect(QRectF(-cardW * 0.5, 41.0, cardW, 36.0), 5.0, 5.0);
 
         painter->setFont(f1);
-        painter->setPen(QColor("#F3F4F6"));
+        painter->setPen(QColor("#E6E8EE"));
         painter->drawText(QRectF(-cardW * 0.5 + 4.0, 43.0, cardW - 8.0, 17.0), Qt::AlignCenter, m_line1);
 
         painter->setFont(f2);
@@ -722,19 +1287,19 @@ public:
             const qreal startX = -totalW * 0.5;
             const qreal yBase = 60.0 + fm2.ascent() + 1.0;
 
-            painter->setPen(QColor("#9CA3AF"));
+            painter->setPen(QColor("#9CA3B2"));
             painter->drawText(QPointF(startX, yBase), prefix);
             painter->setPen(m_statusColor);
             painter->drawText(QPointF(startX + w1, yBase), statusPart);
-            painter->setPen(QColor("#9CA3AF"));
+            painter->setPen(QColor("#9CA3B2"));
             painter->drawText(QPointF(startX + w1 + w2, yBase), suffix);
         } else {
-            painter->setPen(m_kind == NodeKind::FirewallHub ? QColor("#60A5FA") : m_statusColor);
+            painter->setPen(m_kind == NodeKind::FirewallHub ? QColor("#8AB4F8") : m_statusColor);
             painter->drawText(QRectF(-cardW * 0.5 + 4.0, 60.0, cardW - 8.0, 16.0), Qt::AlignCenter, m_line2);
         }
 
         if (option && (option->state & QStyle::State_Selected)) {
-            QPen selPen(QColor("#3B82F6"), 1.6, Qt::DashLine);
+            QPen selPen(QColor("#5B8DEF"), 1.6, Qt::DashLine);
             painter->setPen(selPen);
             painter->setBrush(Qt::NoBrush);
             painter->drawRoundedRect(QRectF(-48.0, -44.0, 96.0, 86.0), 6.0, 6.0);
@@ -751,8 +1316,8 @@ private:
         p->drawRoundedRect(QRectF(-34.0, -34.0, 72.0, 72.0), 10.0, 10.0);
 
         QLinearGradient bgGrad(0.0, -36.0, 0.0, 34.0);
-        bgGrad.setColorAt(0.0, QColor("#20242E"));
-        bgGrad.setColorAt(1.0, QColor("#181B22"));
+        bgGrad.setColorAt(0.0, QColor("#242833"));
+        bgGrad.setColorAt(1.0, QColor("#1B1E26"));
         p->setPen(QPen(m_statusColor, 1.8));
         p->setBrush(bgGrad);
         p->drawRoundedRect(QRectF(-35.0, -35.0, 70.0, 70.0), 9.0, 9.0);
@@ -768,31 +1333,32 @@ private:
         shield.closeSubpath();
 
         QLinearGradient shGrad(0.0, -24.0, 0.0, 21.0);
-        shGrad.setColorAt(0.0, QColor("#1E3A8A"));
-        shGrad.setColorAt(1.0, QColor("#172554"));
-        p->setPen(QPen(QColor("#60A5FA"), 1.6));
+        shGrad.setColorAt(0.0, QColor("#24344D"));
+        shGrad.setColorAt(1.0, QColor("#1B2638"));
+        p->setPen(QPen(QColor("#5B8DEF"), 1.6));
         p->setBrush(shGrad);
         p->drawPath(shield);
 
         // Inner key/lock core
-        p->setPen(QPen(QColor("#F3F4F6"), 1.8));
+        p->setPen(QPen(QColor("#E6E8EE"), 1.8));
         p->setBrush(Qt::NoBrush);
         p->drawArc(QRectF(-5.0, -12.0, 10.0, 10.0), 0, 180 * 16);
-        p->setBrush(QColor("#F3F4F6"));
+        p->setBrush(QColor("#E6E8EE"));
         p->setPen(Qt::NoPen);
         p->drawRoundedRect(QRectF(-7.5, -6.0, 15.0, 11.0), 2.0, 2.0);
-        p->setBrush(QColor("#1E3A8A"));
+        p->setBrush(QColor("#1B2638"));
         p->drawEllipse(QPointF(0.0, -1.0), 2.0, 2.0);
     }
 
     void paintAlertBadge(QPainter *p) const {
-        p->setPen(QPen(QColor("#EF4444"), 2.0));
-        p->setBrush(QColor("#2A161B"));
+        p->setPen(QPen(QColor("#FA8080"), 1.8));
+        p->setBrush(QColor("#2A191E"));
         p->drawEllipse(QPointF(30.0, -30.0), 9.0, 9.0);
-        QFont bf("DejaVu Sans Mono", 8, QFont::Bold);
-        p->setFont(bf);
-        p->setPen(QColor("#FCA5A5"));
-        p->drawText(QRectF(21.0, -39.0, 18.0, 18.0), Qt::AlignCenter, "!");
+        p->setPen(QPen(QColor("#FCA5A5"), 2.0, Qt::SolidLine, Qt::RoundCap));
+        p->drawLine(QPointF(30.0, -34.2), QPointF(30.0, -29.2));
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor("#FCA5A5"));
+        p->drawEllipse(QPointF(30.0, -26.4), 1.2, 1.2);
     }
 
     void paintMonitorIcon(QPainter *p) const {
@@ -805,14 +1371,14 @@ private:
         p->drawRoundedRect(QRectF(-20.0, 35.0, 45.0, 6.0), 2.5, 2.5);
 
         const QColor bezelTop = m_mutedState
-                                    ? QColor("#2B303C")
-                                    : (m_elevatedAlert ? QColor("#451A20") : QColor("#20242E"));
+                                    ? QColor("#2B303A")
+                                    : (m_elevatedAlert ? QColor("#361C21") : QColor("#22252D"));
         const QColor chinStand = m_mutedState
                                      ? QColor("#6B7280")
-                                     : (m_elevatedAlert ? QColor("#EF4444") : QColor("#9CA3AF"));
+                                     : (m_elevatedAlert ? QColor("#C25962") : QColor("#8E95A5"));
 
         if (m_elevatedAlert) {
-            p->setPen(QPen(QColor("#EF4444"), 2.0));
+            p->setPen(QPen(QColor("#E05D66"), 1.8));
             p->setBrush(Qt::NoBrush);
             p->drawRoundedRect(QRectF(-38.0, -39.0, 76.0, 62.0), 6.0, 6.0);
         }
@@ -823,13 +1389,13 @@ private:
         stand.lineTo(13.0, 34.0);
         stand.lineTo(-13.0, 34.0);
         stand.closeSubpath();
-        p->setPen(QPen(QColor("#111318"), 1.1));
+        p->setPen(QPen(QColor("#17181D"), 1.1));
         p->setBrush(chinStand.darker(115));
         p->drawPath(stand);
         p->setBrush(chinStand);
         p->drawRoundedRect(QRectF(-22.0, 33.0, 44.0, 6.0), 2.2, 2.2);
 
-        p->setPen(QPen(QColor("#111318"), 1.4));
+        p->setPen(QPen(QColor("#17181D"), 1.4));
         p->setBrush(bezelTop);
         p->drawRoundedRect(QRectF(-35.0, -36.0, 70.0, 56.0), 4.5, 4.5);
 
@@ -843,57 +1409,57 @@ private:
         p->setBrush(m_statusColor);
         p->drawEllipse(QRectF(-2.5, 13.0, 5.0, 5.0));
 
-        QColor scrTop("#1D4ED8");
-        QColor scrBot("#1E3A8A");
+        QColor scrTop("#24344D");
+        QColor scrBot("#1B2638");
         if (m_mutedState) {
-            scrTop = QColor("#374151");
-            scrBot = QColor("#1F2937");
+            scrTop = QColor("#2B303A");
+            scrBot = QColor("#1E222A");
         } else if (m_elevatedAlert) {
-            scrTop = QColor("#991B1B");
-            scrBot = QColor("#7F1D1D");
+            scrTop = QColor("#3A1B20");
+            scrBot = QColor("#291317");
         } else if (m_roleTag == "souei") {
-            scrTop = QColor("#B45309");
-            scrBot = QColor("#78350F");
+            scrTop = QColor("#2E2318");
+            scrBot = QColor("#211912");
         } else if (m_roleTag == "ranga-iso") {
-            scrTop = QColor("#047857");
-            scrBot = QColor("#064E3B");
+            scrTop = QColor("#173329");
+            scrBot = QColor("#11241D");
         } else if (m_roleTag == "ranga-shared") {
-            scrTop = QColor("#92400E");
-            scrBot = QColor("#78350F");
+            scrTop = QColor("#2C2217");
+            scrBot = QColor("#1F1810");
         } else if (m_roleTag == "tanuki") {
-            scrTop = QColor("#1D4ED8");
-            scrBot = QColor("#1E3A8A");
+            scrTop = QColor("#24344D");
+            scrBot = QColor("#1B2638");
         }
         QLinearGradient scrGrad(0.0, -31.0, 0.0, 6.0);
         scrGrad.setColorAt(0.0, scrTop);
         scrGrad.setColorAt(1.0, scrBot);
-        p->setPen(QPen(QColor("#111318"), 1.0));
+        p->setPen(QPen(QColor("#17181D"), 1.0));
         p->setBrush(scrGrad);
         p->drawRoundedRect(QRectF(-30.0, -31.0, 60.0, 37.0), 1.5, 1.5);
 
         p->setPen(Qt::NoPen);
         if (m_roleTag == "chronoa") {
-            p->setBrush(QColor("#F3F4F6"));
+            p->setBrush(QColor("#E6E8EE"));
             p->drawRect(QRectF(-10.0, -22.0, 9.0, 9.0));
             p->drawRect(QRectF(1.0, -22.0, 9.0, 9.0));
             p->drawRect(QRectF(-10.0, -11.0, 9.0, 9.0));
             p->drawRect(QRectF(1.0, -11.0, 9.0, 9.0));
         } else if (m_roleTag == "souei") {
-            p->setPen(QPen(QColor("#F3F4F6"), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p->setPen(QPen(QColor("#E6E8EE"), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p->drawLine(QPointF(-14.0, -18.0), QPointF(-7.0, -12.5));
             p->drawLine(QPointF(-7.0, -12.5), QPointF(-14.0, -7.0));
             p->drawLine(QPointF(-2.0, -7.0), QPointF(10.0, -7.0));
         } else if (m_roleTag == "ranga-iso") {
-            p->setPen(QPen(QColor("#F3F4F6"), 2.0));
+            p->setPen(QPen(QColor("#E6E8EE"), 2.0));
             p->setBrush(Qt::NoBrush);
             p->drawArc(QRectF(-7.0, -24.0, 14.0, 14.0), 0, 180 * 16);
-            p->setBrush(QColor("#F3F4F6"));
+            p->setBrush(QColor("#E6E8EE"));
             p->setPen(Qt::NoPen);
             p->drawRoundedRect(QRectF(-10.0, -16.0, 20.0, 14.0), 2.0, 2.0);
             p->setBrush(scrBot);
             p->drawEllipse(QRectF(-2.0, -11.0, 4.0, 4.0));
         } else if (m_roleTag == "tanuki") {
-            p->setPen(QPen(QColor("#F3F4F6"), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p->setPen(QPen(QColor("#E6E8EE"), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p->setBrush(Qt::NoBrush);
             QPainterPath shield;
             shield.moveTo(0.0, -24.0);
@@ -906,7 +1472,7 @@ private:
             p->drawPath(shield);
             p->drawEllipse(QPointF(0.0, -13.0), 3.2, 3.2);
         } else {
-            p->setPen(QPen(QColor("#F3F4F6"), 2.0));
+            p->setPen(QPen(QColor("#E6E8EE"), 2.0));
             p->setBrush(Qt::NoBrush);
             p->drawEllipse(QRectF(-13.0, -20.0, 14.0, 14.0));
             p->drawEllipse(QRectF(-1.0, -16.0, 14.0, 14.0));
@@ -1029,7 +1595,7 @@ public:
         painter->setBrush(m_color);
         painter->drawPolygon(head);
 
-        QFont lblFont("DejaVu Sans Mono", 8, QFont::Bold);
+        const QFont lblFont = resolveUiFont(8.0, QFont::DemiBold);
         painter->setFont(lblFont);
         const QFontMetrics fm(lblFont);
         const int txtW = fm.horizontalAdvance(m_label) + 12;
@@ -1058,10 +1624,10 @@ public:
             painter->save();
             painter->translate(mid);
             painter->rotate(deg);
-            painter->setPen(QPen(QColor("#2B303C"), 1.0));
-            painter->setBrush(QColor(24, 27, 34, 240));
+            painter->setPen(QPen(QColor("#2F3440"), 1.0));
+            painter->setBrush(QColor(23, 24, 29, 240));
             painter->drawRoundedRect(QRectF(-halfGap, -8.5, txtW, 17.0), 4.0, 4.0);
-            painter->setPen(QColor("#F3F4F6"));
+            painter->setPen(QColor("#E6E8EE"));
             painter->drawText(QRectF(-halfGap, -8.5, txtW, 17.0), Qt::AlignCenter, m_label);
             painter->restore();
         }
@@ -1125,8 +1691,8 @@ protected:
         painter->resetTransform();
         const QRect vp = viewport()->rect();
         QLinearGradient grad(0.0, 0.0, 0.0, static_cast<qreal>(vp.height()));
-        grad.setColorAt(0.0, QColor("#181B22"));
-        grad.setColorAt(1.0, QColor("#111318"));
+        grad.setColorAt(0.0, QColor("#1F2027"));
+        grad.setColorAt(1.0, QColor("#17181D"));
         painter->fillRect(vp, grad);
         painter->restore();
     }
@@ -1810,6 +2376,20 @@ public slots:
     }
 
 private:
+    void syncViewModeButtons(int workspaceMode) {
+        const bool inOps = (workspaceMode == 0);
+        const int tabIdx = m_mainViewTabs ? m_mainViewTabs->currentIndex() : 0;
+        if (m_btnTableMode) {
+            m_btnTableMode->setChecked(inOps && tabIdx == 0);
+        }
+        if (m_btnGraphMode) {
+            m_btnGraphMode->setChecked(inOps && tabIdx == 1);
+        }
+        if (m_btnInspectToggle && m_inspectorDrawer) {
+            m_btnInspectToggle->setChecked(inOps && m_inspectorDrawer->isVisible());
+        }
+    }
+
     void switchWorkspaceMode(int modeIdx) {
         if (!m_workspaceStack) {
             return;
@@ -1821,8 +2401,12 @@ private:
                 m_railBtns.at(i)->setChecked(i == clamped);
             }
         }
+        syncViewModeButtons(clamped);
         if (clamped == 0 && m_mainViewTabs && m_mainViewTabs->currentIndex() == 1) {
             rebuildSessionGraph();
+        } else if (clamped == 2 && m_dbConnected && !m_vaultLocked && !m_actionInFlight) {
+            refreshFleetHostsView();
+            refreshHistoryTimelineView();
         }
     }
 
@@ -2069,6 +2653,21 @@ private:
         connect(actTanukiPurge, &QAction::triggered, this, [this]() { promptTanukiPurge(); });
         addTanukiModalItem("Skill: Inspect Tanuki Manifest", "skill");
 
+        QMenu *mVault = mb->addMenu("Vault && PKI");
+        QAction *actUnlockVault = mVault->addAction("Unlock Shuna Vault...");
+        QAction *actRotateDek = mVault->addAction("Rotate DEK (Online)...");
+        QAction *actExportBackup = mVault->addAction("Export SHUNAS1 Backup...");
+        mVault->addSeparator();
+        QAction *actRotateToken = mVault->addAction("Rotate Session Token (30s Grace)");
+        QAction *actIssueSession = mVault->addAction("Issue Cert-Bound Token...");
+        QAction *actRevokeCert = mVault->addAction("Revoke Certificate...");
+        connect(actUnlockVault, &QAction::triggered, this, [this]() { promptVaultUnlock(); });
+        connect(actRotateDek, &QAction::triggered, this, [this]() { promptVaultRotate(); });
+        connect(actExportBackup, &QAction::triggered, this, [this]() { promptBackupExport(); });
+        connect(actRotateToken, &QAction::triggered, this, [this]() { handleOperativeCommand("token_rotate"); });
+        connect(actIssueSession, &QAction::triggered, this, [this]() { promptSessionIssue(); });
+        connect(actRevokeCert, &QAction::triggered, this, [this]() { promptCertRevoke(); });
+
         QMenu *mHelp = mb->addMenu("Help");
         QAction *actAbout = mHelp->addAction("About Ciel");
         connect(actAbout, &QAction::triggered, this, [this]() {
@@ -2093,27 +2692,40 @@ private:
         // 1. Slim Left Activity Rail (InfinityCurve shell)
         auto *rail = new QWidget(root);
         rail->setObjectName("LeftRail");
-        rail->setFixedWidth(54);
+        rail->setFixedWidth(52);
         auto *railLay = new QVBoxLayout(rail);
-        railLay->setContentsMargins(0, 6, 0, 6);
-        railLay->setSpacing(4);
+        railLay->setContentsMargins(4, 8, 4, 8);
+        railLay->setSpacing(6);
+        railLay->setAlignment(Qt::AlignHCenter);
 
-        auto addRailButton = [&](int idx, const QString &shortText, const QString &tooltip) {
-            auto *btn = new QPushButton(shortText, rail);
+        auto *brandLbl = new QLabel(rail);
+        brandLbl->setObjectName("RailBrandMark");
+        brandLbl->setFixedSize(34, 34);
+        brandLbl->setAlignment(Qt::AlignCenter);
+        brandLbl->setPixmap(makeCielPixmap(CielIconKind::BrandMark, QColor("#5B8DEF"), 22));
+        brandLbl->setToolTip("Ciel 4-Cycle Identity Operations Console");
+        railLay->addWidget(brandLbl, 0, Qt::AlignHCenter);
+
+        auto addRailButton = [&](int idx, CielIconKind kind, const QString &accName, const QString &tooltip) {
+            auto *btn = new QPushButton(rail);
             btn->setObjectName("RailBtn");
             btn->setCheckable(true);
+            btn->setFixedSize(42, 38);
+            btn->setIcon(makeCielIcon(kind, QColor("#8E96A8"), QColor("#E6E8EE"), 20));
+            btn->setIconSize(QSize(20, 20));
+            btn->setAccessibleName(accName);
             btn->setToolTip(tooltip);
             connect(btn, &QPushButton::clicked, this, [this, idx]() { switchWorkspaceMode(idx); });
             m_railBtns.append(btn);
             return btn;
         };
 
-        railLay->addWidget(addRailButton(0, "OPS", "Operations: Live Operatives Matrix, Session Graph & Inspector"));
-        railLay->addWidget(addRailButton(1, "MOD", "Modules: 4-Cycle Tanuki & Tempest Module Launcher"));
-        railLay->addWidget(addRailButton(2, "FLT", "Fleet & History: Decrypted PostgreSQL Hosts & Audit Timeline"));
-        railLay->addWidget(addRailButton(3, "VLT", "Vault & PKI: Shuna Vault Lockout/Rotation/Backup & PQC mTLS PKI"));
+        railLay->addWidget(addRailButton(0, CielIconKind::RailOps, "Operations", "Operations: Live Operatives Matrix, Session Graph & Inspector"), 0, Qt::AlignHCenter);
+        railLay->addWidget(addRailButton(1, CielIconKind::RailModules, "Modules", "Modules: 4-Cycle Tanuki & Tempest Module Launcher"), 0, Qt::AlignHCenter);
+        railLay->addWidget(addRailButton(2, CielIconKind::RailFleet, "Fleet & History", "Fleet & History: Decrypted PostgreSQL Hosts & Audit Timeline"), 0, Qt::AlignHCenter);
+        railLay->addWidget(addRailButton(3, CielIconKind::RailVault, "Vault & PKI", "Vault & PKI: Shuna Vault Lockout/Rotation/Backup & PQC mTLS PKI"), 0, Qt::AlignHCenter);
         railLay->addStretch(1);
-        railLay->addWidget(addRailButton(4, "CFG", "Targets & Sensors: Field Target Paths & Transport Sensors"));
+        railLay->addWidget(addRailButton(4, CielIconKind::RailSettings, "Targets & Sensors", "Targets & Sensors: Field Target Paths & Transport Sensors"), 0, Qt::AlignHCenter);
         if (!m_railBtns.isEmpty()) {
             m_railBtns.first()->setChecked(true);
         }
@@ -2148,29 +2760,45 @@ private:
             applySessionTableFilter(txt);
         });
 
-        auto *btnTableMode = new QPushButton("Table", kpiBar);
-        btnTableMode->setObjectName("SecondaryBtn");
-        connect(btnTableMode, &QPushButton::clicked, this, [this]() {
+        m_btnTableMode = new QPushButton("Table", kpiBar);
+        m_btnTableMode->setObjectName("SecondaryBtn");
+        m_btnTableMode->setCheckable(true);
+        m_btnTableMode->setChecked(true);
+        m_btnTableMode->setIcon(makeCielIcon(CielIconKind::TableGrid, QColor("#9CA3B2"), QColor("#E6E8EE"), 14));
+        m_btnTableMode->setIconSize(QSize(14, 14));
+        connect(m_btnTableMode, &QPushButton::clicked, this, [this]() {
             switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(0);
+            syncViewModeButtons(0);
         });
-        auto *btnGraphMode = new QPushButton("Graph", kpiBar);
-        btnGraphMode->setObjectName("SecondaryBtn");
-        connect(btnGraphMode, &QPushButton::clicked, this, [this]() {
+        m_btnGraphMode = new QPushButton("Graph", kpiBar);
+        m_btnGraphMode->setObjectName("SecondaryBtn");
+        m_btnGraphMode->setCheckable(true);
+        m_btnGraphMode->setIcon(makeCielIcon(CielIconKind::GraphNodes, QColor("#9CA3B2"), QColor("#E6E8EE"), 14));
+        m_btnGraphMode->setIconSize(QSize(14, 14));
+        connect(m_btnGraphMode, &QPushButton::clicked, this, [this]() {
             switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(1);
             rebuildSessionGraph();
+            syncViewModeButtons(0);
         });
-        auto *btnInspectToggle = new QPushButton("Inspector", kpiBar);
-        btnInspectToggle->setObjectName("SecondaryBtn");
-        connect(btnInspectToggle, &QPushButton::clicked, this, [this]() {
+        m_btnInspectToggle = new QPushButton("Inspector", kpiBar);
+        m_btnInspectToggle->setObjectName("SecondaryBtn");
+        m_btnInspectToggle->setCheckable(true);
+        m_btnInspectToggle->setChecked(true);
+        m_btnInspectToggle->setIcon(makeCielIcon(CielIconKind::InspectorPane, QColor("#9CA3B2"), QColor("#E6E8EE"), 14));
+        m_btnInspectToggle->setIconSize(QSize(14, 14));
+        connect(m_btnInspectToggle, &QPushButton::clicked, this, [this]() {
             switchWorkspaceMode(0);
             if (m_inspectorDrawer) {
                 m_inspectorDrawer->setVisible(!m_inspectorDrawer->isVisible());
             }
+            syncViewModeButtons(0);
         });
         auto *btnSyncNow = new QPushButton("Sync Now", kpiBar);
         btnSyncNow->setObjectName("PrimaryBtn");
+        btnSyncNow->setIcon(makeCielIcon(CielIconKind::SyncRefresh, QColor("#E6E8EE"), QColor(), 14));
+        btnSyncNow->setIconSize(QSize(14, 14));
         connect(btnSyncNow, &QPushButton::clicked, this, [this]() { runFullSync(false); });
 
         kpiLay->addWidget(m_kpiTransportBadge);
@@ -2179,9 +2807,9 @@ private:
         kpiLay->addWidget(m_kpiFreshnessLabel);
         kpiLay->addStretch(1);
         kpiLay->addWidget(m_filterEdit);
-        kpiLay->addWidget(btnTableMode);
-        kpiLay->addWidget(btnGraphMode);
-        kpiLay->addWidget(btnInspectToggle);
+        kpiLay->addWidget(m_btnTableMode);
+        kpiLay->addWidget(m_btnGraphMode);
+        kpiLay->addWidget(m_btnInspectToggle);
         kpiLay->addWidget(btnSyncNow);
         mainCol->addWidget(kpiBar);
 
@@ -2189,16 +2817,24 @@ private:
         m_vaultBanner = new QWidget(root);
         m_vaultBanner->setObjectName("VaultBanner");
         auto *vbLay = new QHBoxLayout(m_vaultBanner);
-        vbLay->setContentsMargins(10, 4, 10, 4);
+        vbLay->setContentsMargins(10, 5, 10, 5);
         vbLay->setSpacing(10);
+        auto *vbIcon = new QLabel(m_vaultBanner);
+        vbIcon->setPixmap(makeCielPixmap(CielIconKind::VaultAlertLock, QColor("#FCA5A5"), 16));
+        vbIcon->setFixedSize(16, 16);
         m_vaultBannerLabel = new QLabel("SHUNA VAULT LOCKED :: Encrypted PostgreSQL fleet operations paused.", m_vaultBanner);
         m_vaultBannerLabel->setObjectName("VaultBannerText");
         auto *vbUnlockBtn = new QPushButton("Unlock Vault...", m_vaultBanner);
         vbUnlockBtn->setObjectName("PrimaryBtn");
+        vbUnlockBtn->setIcon(makeCielIcon(CielIconKind::LockOpen, QColor("#E6E8EE"), QColor(), 14));
+        vbUnlockBtn->setIconSize(QSize(14, 14));
         connect(vbUnlockBtn, &QPushButton::clicked, this, [this]() { promptVaultUnlock(); });
         auto *vbViewBtn = new QPushButton("Vault & PKI", m_vaultBanner);
         vbViewBtn->setObjectName("SecondaryBtn");
+        vbViewBtn->setIcon(makeCielIcon(CielIconKind::RailVault, QColor("#E6E8EE"), QColor(), 14));
+        vbViewBtn->setIconSize(QSize(14, 14));
         connect(vbViewBtn, &QPushButton::clicked, this, [this]() { switchWorkspaceMode(3); });
+        vbLay->addWidget(vbIcon);
         vbLay->addWidget(m_vaultBannerLabel, 1);
         vbLay->addWidget(vbUnlockBtn);
         vbLay->addWidget(vbViewBtn);
@@ -2219,14 +2855,16 @@ private:
         m_mainViewTabs = new QTabWidget(m_topSplit);
         m_mainViewTabs->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         m_mainViewTabs->setMinimumWidth(460);
+        m_mainViewTabs->setIconSize(QSize(14, 14));
         m_sessionTable = buildSessionTable();
         QWidget *graphContainer = buildSessionGraphContainer();
-        m_mainViewTabs->addTab(m_sessionTable, "Operatives");
-        m_mainViewTabs->addTab(graphContainer, "Session Graph");
+        m_mainViewTabs->addTab(m_sessionTable, makeCielIcon(CielIconKind::TableGrid, QColor("#9CA3B2"), QColor("#E6E8EE"), 14), "Operatives");
+        m_mainViewTabs->addTab(graphContainer, makeCielIcon(CielIconKind::GraphNodes, QColor("#9CA3B2"), QColor("#E6E8EE"), 14), "Session Graph");
         connect(m_mainViewTabs, &QTabWidget::currentChanged, this, [this](int idx) {
             if (idx == 1) {
                 rebuildSessionGraph();
             }
+            syncViewModeButtons(m_workspaceStack ? m_workspaceStack->currentIndex() : 0);
         });
 
         m_inspectorDrawer = new QWidget(m_topSplit);
@@ -2246,13 +2884,18 @@ private:
         m_inspectorTitleLabel->setObjectName("SectionLabel");
         auto *btnTsInspect = new QPushButton("Teamserver", inspHdr);
         btnTsInspect->setObjectName("SecondaryBtn");
+        btnTsInspect->setIcon(makeCielIcon(CielIconKind::TeamserverHub, QColor("#9CA3B2"), QColor(), 14));
+        btnTsInspect->setIconSize(QSize(14, 14));
         btnTsInspect->setToolTip("Inspect Teamserver mTLS & Shuna Vault telemetry");
         connect(btnTsInspect, &QPushButton::clicked, this, [this]() { showTeamserverInInspector(); });
         auto *btnCloseInsp = new QPushButton("Hide [Esc]", inspHdr);
         btnCloseInsp->setObjectName("SecondaryBtn");
+        btnCloseInsp->setIcon(makeCielIcon(CielIconKind::CloseCross, QColor("#9CA3B2"), QColor(), 12));
+        btnCloseInsp->setIconSize(QSize(12, 12));
         btnCloseInsp->setToolTip("Close Inspector Drawer (Escape)");
         connect(btnCloseInsp, &QPushButton::clicked, this, [this]() {
             m_inspectorDrawer->setVisible(false);
+            syncViewModeButtons(m_workspaceStack ? m_workspaceStack->currentIndex() : 0);
             if (m_sessionTable) {
                 m_sessionTable->setFocus();
             }
@@ -2263,9 +2906,10 @@ private:
         inspLay->addWidget(inspHdr);
 
         m_smallTabs = new QTabWidget(m_inspectorDrawer);
+        m_smallTabs->setIconSize(QSize(14, 14));
         m_inspectorSummary = new QTextEdit(m_smallTabs);
         m_inspectorSummary->setReadOnly(true);
-        m_inspectorSummary->setFont(QFont("DejaVu Sans Mono", 9));
+        m_inspectorSummary->setFont(resolveMonoFont(9.0));
         m_inspectorSummary->setPlainText(
             formatDotLeader("Endpoint", m_serverAddr) + "\n" +
             formatDotLeader("Transport", "mTLS 1.3 (X25519MLKEM768)") + "\n" +
@@ -2274,9 +2918,10 @@ private:
 
         m_rawTelemetry = new QPlainTextEdit(m_smallTabs);
         m_rawTelemetry->setReadOnly(true);
+        m_rawTelemetry->setFont(resolveMonoFont(9.0));
         m_rawTelemetry->setPlaceholderText("Select an operative row in Operatives to inspect raw JSON.");
-        m_smallTabs->addTab(m_inspectorSummary, "Summary");
-        m_smallTabs->addTab(m_rawTelemetry, "Raw JSON");
+        m_smallTabs->addTab(m_inspectorSummary, makeCielIcon(CielIconKind::SummaryList, QColor("#9CA3B2"), QColor("#E6E8EE"), 14), "Summary");
+        m_smallTabs->addTab(m_rawTelemetry, makeCielIcon(CielIconKind::RawJsonBraces, QColor("#9CA3B2"), QColor("#E6E8EE"), 14), "Raw JSON");
         inspLay->addWidget(m_smallTabs, 1);
 
         m_topSplit->addWidget(m_mainViewTabs);
@@ -2294,17 +2939,24 @@ private:
         // Bottom Dock: strictly 2 tabs (Operative Console | Event Viewer)
         m_bottomTabs = new QTabWidget(m_topBotSplitter);
         m_bottomTabs->setObjectName("BottomDock");
+        m_bottomTabs->setIconSize(QSize(14, 14));
         m_bottomTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
         m_bottomTabs->setMinimumHeight(210);
 
         m_eventViewer = new QTextEdit(m_bottomTabs);
         m_eventViewer->setReadOnly(true);
-        m_eventViewer->setFont(QFont("DejaVu Sans Mono", 8));
+        m_eventViewer->setFont(resolveMonoFont(8.5));
         m_eventViewer->setLineWrapMode(QTextEdit::WidgetWidth);
         m_eventViewer->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
 
-        m_consoleTabIdx = m_bottomTabs->addTab(buildOperativeConsoleTab(), "Operative Console");
-        m_eventTabIdx = m_bottomTabs->addTab(m_eventViewer, "Event Viewer");
+        m_consoleTabIdx = m_bottomTabs->addTab(
+            buildOperativeConsoleTab(),
+            makeCielIcon(CielIconKind::ConsolePrompt, QColor("#9CA3B2"), QColor("#E6E8EE"), 14),
+            "Operative Console");
+        m_eventTabIdx = m_bottomTabs->addTab(
+            m_eventViewer,
+            makeCielIcon(CielIconKind::EventPulse, QColor("#9CA3B2"), QColor("#E6E8EE"), 14),
+            "Event Viewer");
         m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
 
         m_topBotSplitter->addWidget(m_workspaceStack);
@@ -2431,6 +3083,43 @@ private:
                         .arg(m_vaultRetryAfterSec)
                         .arg(m_vaultWiped ? "true (offline recovery required)" : "false"));
             }
+        }
+        if (m_fleetEmptyBanner) {
+            if (!m_dbConnected) {
+                m_fleetEmptyBanner->setText("Standalone ephemeral mode: pass --pg-dsn and --vault-dir to ciel-teamserver to persist encrypted PostgreSQL 16 fleet hosts and AEAD audit history.");
+                m_fleetEmptyBanner->setProperty("alertState", "");
+                m_fleetEmptyBanner->setVisible(true);
+            } else if (m_vaultLocked || m_vaultWiped) {
+                m_fleetEmptyBanner->setText("Shuna Vault is locked: unlock the vault via the Vault & PKI workspace or top banner before querying encrypted PostgreSQL fleet records.");
+                m_fleetEmptyBanner->setProperty("alertState", "locked");
+                m_fleetEmptyBanner->setVisible(true);
+            } else {
+                m_fleetEmptyBanner->setProperty("alertState", "");
+                m_fleetEmptyBanner->setVisible(false);
+            }
+            m_fleetEmptyBanner->style()->unpolish(m_fleetEmptyBanner);
+            m_fleetEmptyBanner->style()->polish(m_fleetEmptyBanner);
+        }
+        if (m_btnVaultUnlock) {
+            m_btnVaultUnlock->setEnabled(m_dbConnected && m_vaultLocked && !m_vaultWiped);
+            m_btnVaultUnlock->setToolTip(
+                !m_dbConnected ? "PostgreSQL + Shuna Vault not configured (standalone mode)"
+                               : (m_vaultWiped ? "Strict lockout wipe triggered; offline recovery required"
+                                               : (m_vaultLocked ? "Unlock Shuna Vault using Argon2id passphrase" : "Vault already unlocked")));
+        }
+        if (m_btnVaultRotate) {
+            m_btnVaultRotate->setEnabled(m_dbConnected && !m_vaultLocked && !m_vaultWiped);
+            m_btnVaultRotate->setToolTip(
+                (!m_dbConnected || m_vaultLocked || m_vaultWiped)
+                    ? "Requires connected PostgreSQL 16 and unlocked Shuna Vault"
+                    : "Perform online dual-key DEK rotation");
+        }
+        if (m_btnVaultBackup) {
+            m_btnVaultBackup->setEnabled(m_dbConnected && !m_vaultLocked && !m_vaultWiped);
+            m_btnVaultBackup->setToolTip(
+                (!m_dbConnected || m_vaultLocked || m_vaultWiped)
+                    ? "Requires connected PostgreSQL 16 and unlocked Shuna Vault"
+                    : "Export encrypted SHUNAS1 archive");
         }
         if (m_vaultDetailLabel) {
             m_vaultDetailLabel->setText(
@@ -2775,25 +3464,6 @@ private:
 
         auto *pill = new QWidget(pillWrap);
         pill->setObjectName("GraphZoomPill");
-        pill->setStyleSheet(
-            "QWidget#GraphZoomPill {"
-            "  background-color: rgba(24, 27, 34, 230);"
-            "  border: 1px solid #2B303C;"
-            "  border-radius: 6px;"
-            "}"
-            "QWidget#GraphZoomPill QPushButton {"
-            "  background-color: transparent;"
-            "  color: #F3F4F6;"
-            "  border: none;"
-            "  border-radius: 4px;"
-            "  padding: 2px 6px;"
-            "  min-height: 18px;"
-            "  font-size: 11px;"
-            "  font-weight: bold;"
-            "}"
-            "QWidget#GraphZoomPill QPushButton:hover {"
-            "  background-color: #2B303C;"
-            "}");
         auto *pillLay = new QHBoxLayout(pill);
         pillLay->setContentsMargins(4, 2, 4, 2);
         pillLay->setSpacing(2);
@@ -2889,6 +3559,7 @@ private:
 
         m_operativeConsole = new QTextEdit(panel);
         m_operativeConsole->setReadOnly(true);
+        m_operativeConsole->setFont(resolveMonoFont(9.0));
         m_operativeConsole->setLineWrapMode(QTextEdit::NoWrap);
         grid->addWidget(m_operativeConsole, 0, 0, 1, 2);
 
@@ -2897,15 +3568,18 @@ private:
                 .arg(m_localUser, m_localHost, m_localUid, m_localArch),
             panel);
         m_sessionBanner->setObjectName("SessionBanner");
+        m_sessionBanner->setFont(resolveMonoFont(8.5));
         m_sessionBanner->setTextInteractionFlags(Qt::TextSelectableByMouse);
         grid->addWidget(m_sessionBanner, 1, 0, 1, 2);
 
         auto *prompt = new QLabel(QString::fromUtf8(">>>"), panel);
         prompt->setObjectName("PromptArrow");
+        prompt->setFont(resolveMonoFont(9.0));
         grid->addWidget(prompt, 2, 0);
 
         m_operativeInput = new QLineEdit(panel);
         m_operativeInput->setObjectName("OperativeInput");
+        m_operativeInput->setFont(resolveMonoFont(9.0));
         m_operativeInput->setPlaceholderText("Command (help, audit, sync, set, hosts, history, unlock, rotate, backup, session_issue, token_rotate, cert_revoke, souei, chronoa, ranga, tanuki <cmd> ...)");
         const QStringList cmds = {
             "help", "audit", "sync", "set", "hosts", "history", "unlock", "rotate", "backup",
@@ -2936,15 +3610,26 @@ private:
     }
 
     QWidget *buildModulesPage() {
-        auto *panel = new QWidget(this);
-        panel->setObjectName("ModulesPanel");
-        auto *vbox = new QVBoxLayout(panel);
-        vbox->setContentsMargins(10, 8, 10, 8);
-        vbox->setSpacing(8);
+        auto *outer = new QWidget(this);
+        outer->setObjectName("ModulesPanel");
+        auto *outerLay = new QVBoxLayout(outer);
+        outerLay->setContentsMargins(10, 8, 10, 8);
+        outerLay->setSpacing(8);
 
-        auto *hdr = new QLabel("4-Cycle Module Catalog :: Progressive-Disclosure Operator Launcher (Options | Preview & CLI)", panel);
+        auto *hdr = new QLabel("4-Cycle Module Catalog :: Progressive-Disclosure Operator Launcher (Options | Preview & CLI)", outer);
         hdr->setObjectName("SectionLabel");
-        vbox->addWidget(hdr);
+        outerLay->addWidget(hdr);
+
+        auto *scroll = new QScrollArea(outer);
+        scroll->setObjectName("ModulesScrollArea");
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+
+        auto *panel = new QWidget(scroll);
+        panel->setObjectName("ModulesScrollViewport");
+        auto *vbox = new QVBoxLayout(panel);
+        vbox->setContentsMargins(0, 0, 4, 0);
+        vbox->setSpacing(8);
 
         auto *grid = new QGridLayout();
         grid->setHorizontalSpacing(10);
@@ -2965,8 +3650,9 @@ private:
             for (int i = 0; i < actions.size(); ++i) {
                 auto *b = new QPushButton(actions[i].first, card);
                 b->setObjectName(actions[i].first.contains("Purge") ? "DangerBtn" : "SecondaryBtn");
+                b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
                 connect(b, &QPushButton::clicked, this, actions[i].second);
-                bg->addWidget(b, i / 3, i % 3);
+                bg->addWidget(b, i / 2, i % 2);
             }
             cl->addLayout(bg);
             cl->addStretch(1);
@@ -3013,8 +3699,21 @@ private:
             {"Ranga File Purge + Revoke...", [this]() { openTempestModuleModal("ranga_purge"); }},
         }), 1, 1);
 
-        vbox->addLayout(grid, 1);
-        return panel;
+        auto *c34Card = makeGroupCard("Cycle 3 & 4 :: Shuna Vault, Post-Quantum mTLS PKI & Fleet Operations", {
+            {"Open Shuna Vault && PKI", [this]() { switchWorkspaceMode(3); }},
+            {"Open Fleet && History", [this]() { switchWorkspaceMode(2); }},
+            {"Rotate Session Token", [this]() { handleOperativeCommand("token_rotate"); }},
+            {"Issue Cert-Bound Token...", [this]() { promptSessionIssue(); }},
+            {"Targets && Sensors", [this]() { switchWorkspaceMode(4); }},
+            {"Run Full 4-Cycle Sync", [this]() { runFullSync(false); }},
+        });
+        grid->addWidget(c34Card, 2, 0, 1, 2);
+
+        vbox->addLayout(grid);
+        vbox->addStretch(1);
+        scroll->setWidget(panel);
+        outerLay->addWidget(scroll, 1);
+        return outer;
     }
 
     QWidget *buildFleetAndHistoryPage() {
@@ -3029,17 +3728,28 @@ private:
         hLbl->setObjectName("SectionLabel");
         auto *btnRefHosts = new QPushButton("Refresh Hosts", panel);
         btnRefHosts->setObjectName("SecondaryBtn");
+        btnRefHosts->setIcon(makeCielIcon(CielIconKind::SyncRefresh, QColor("#9CA3B2"), QColor(), 14));
+        btnRefHosts->setIconSize(QSize(14, 14));
         connect(btnRefHosts, &QPushButton::clicked, this, [this]() { refreshFleetHostsView(); });
         m_historyFilterCombo = new QComboBox(panel);
         m_historyFilterCombo->addItems({"All Operatives", "OP-01", "OP-02", "OP-03", "OP-04", "OP-05", "OP-06"});
         auto *btnRefHist = new QPushButton("Refresh History", panel);
         btnRefHist->setObjectName("PrimaryBtn");
+        btnRefHist->setIcon(makeCielIcon(CielIconKind::SyncRefresh, QColor("#E6E8EE"), QColor(), 14));
+        btnRefHist->setIconSize(QSize(14, 14));
         connect(btnRefHist, &QPushButton::clicked, this, [this]() { refreshHistoryTimelineView(); });
         topRow->addWidget(hLbl, 1);
         topRow->addWidget(btnRefHosts);
         topRow->addWidget(m_historyFilterCombo);
         topRow->addWidget(btnRefHist);
         vbox->addLayout(topRow);
+
+        m_fleetEmptyBanner = new QLabel(
+            "Standalone ephemeral mode: pass --pg-dsn and --vault-dir to ciel-teamserver to persist encrypted PostgreSQL 16 fleet hosts and AEAD audit history.",
+            panel);
+        m_fleetEmptyBanner->setObjectName("EmptyStateLabel");
+        m_fleetEmptyBanner->setWordWrap(true);
+        vbox->addWidget(m_fleetEmptyBanner);
 
         m_hostsTable = new QTableWidget(0, 6, panel);
         m_hostsTable->setShowGrid(false);
@@ -3085,23 +3795,29 @@ private:
         vLay->addWidget(vTitle);
 
         m_vaultDetailLabel = new QLabel(vCard);
-        m_vaultDetailLabel->setFont(QFont("DejaVu Sans Mono", 9));
+        m_vaultDetailLabel->setFont(resolveMonoFont(9.0));
         m_vaultDetailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         vLay->addWidget(m_vaultDetailLabel, 1);
 
         auto *vBtnRow = new QHBoxLayout();
-        auto *btnUnlock = new QPushButton("Unlock Vault...", vCard);
-        btnUnlock->setObjectName("PrimaryBtn");
-        connect(btnUnlock, &QPushButton::clicked, this, [this]() { promptVaultUnlock(); });
-        auto *btnRotate = new QPushButton("Rotate DEK (Online)...", vCard);
-        btnRotate->setObjectName("SecondaryBtn");
-        connect(btnRotate, &QPushButton::clicked, this, [this]() { promptVaultRotate(); });
-        auto *btnBackup = new QPushButton("Export SHUNAS1 Backup...", vCard);
-        btnBackup->setObjectName("SecondaryBtn");
-        connect(btnBackup, &QPushButton::clicked, this, [this]() { promptBackupExport(); });
-        vBtnRow->addWidget(btnUnlock);
-        vBtnRow->addWidget(btnRotate);
-        vBtnRow->addWidget(btnBackup);
+        m_btnVaultUnlock = new QPushButton("Unlock Vault...", vCard);
+        m_btnVaultUnlock->setObjectName("PrimaryBtn");
+        m_btnVaultUnlock->setIcon(makeCielIcon(CielIconKind::LockOpen, QColor("#E6E8EE"), QColor(), 14));
+        m_btnVaultUnlock->setIconSize(QSize(14, 14));
+        connect(m_btnVaultUnlock, &QPushButton::clicked, this, [this]() { promptVaultUnlock(); });
+        m_btnVaultRotate = new QPushButton("Rotate DEK (Online)...", vCard);
+        m_btnVaultRotate->setObjectName("SecondaryBtn");
+        m_btnVaultRotate->setIcon(makeCielIcon(CielIconKind::KeyCredential, QColor("#9CA3B2"), QColor(), 14));
+        m_btnVaultRotate->setIconSize(QSize(14, 14));
+        connect(m_btnVaultRotate, &QPushButton::clicked, this, [this]() { promptVaultRotate(); });
+        m_btnVaultBackup = new QPushButton("Export SHUNAS1 Backup...", vCard);
+        m_btnVaultBackup->setObjectName("SecondaryBtn");
+        m_btnVaultBackup->setIcon(makeCielIcon(CielIconKind::ArchiveExport, QColor("#9CA3B2"), QColor(), 14));
+        m_btnVaultBackup->setIconSize(QSize(14, 14));
+        connect(m_btnVaultBackup, &QPushButton::clicked, this, [this]() { promptBackupExport(); });
+        vBtnRow->addWidget(m_btnVaultUnlock);
+        vBtnRow->addWidget(m_btnVaultRotate);
+        vBtnRow->addWidget(m_btnVaultBackup);
         vLay->addLayout(vBtnRow);
 
         // Card 2: Post-Quantum Hybrid mTLS 1.3 & Session PKI
@@ -3115,19 +3831,25 @@ private:
         pLay->addWidget(pTitle);
 
         m_pkiDetailLabel = new QLabel(pCard);
-        m_pkiDetailLabel->setFont(QFont("DejaVu Sans Mono", 9));
+        m_pkiDetailLabel->setFont(resolveMonoFont(9.0));
         m_pkiDetailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         pLay->addWidget(m_pkiDetailLabel, 1);
 
         auto *pBtnRow = new QHBoxLayout();
         auto *btnTokRot = new QPushButton("Rotate Session Token (30s Grace)", pCard);
         btnTokRot->setObjectName("PrimaryBtn");
+        btnTokRot->setIcon(makeCielIcon(CielIconKind::SyncRefresh, QColor("#E6E8EE"), QColor(), 14));
+        btnTokRot->setIconSize(QSize(14, 14));
         connect(btnTokRot, &QPushButton::clicked, this, [this]() { handleOperativeCommand("token_rotate"); });
         auto *btnSessIssue = new QPushButton("Issue Cert-Bound Token...", pCard);
         btnSessIssue->setObjectName("SecondaryBtn");
+        btnSessIssue->setIcon(makeCielIcon(CielIconKind::ShieldCheck, QColor("#9CA3B2"), QColor(), 14));
+        btnSessIssue->setIconSize(QSize(14, 14));
         connect(btnSessIssue, &QPushButton::clicked, this, [this]() { promptSessionIssue(); });
         auto *btnRevoke = new QPushButton("Revoke Certificate...", pCard);
         btnRevoke->setObjectName("DangerBtn");
+        btnRevoke->setIcon(makeCielIcon(CielIconKind::CertRevoke, QColor("#F5D0D5"), QColor(), 14));
+        btnRevoke->setIconSize(QSize(14, 14));
         connect(btnRevoke, &QPushButton::clicked, this, [this]() { promptCertRevoke(); });
         pBtnRow->addWidget(btnTokRot);
         pBtnRow->addWidget(btnSessIssue);
@@ -3179,7 +3901,7 @@ private:
                 auto *it = new QTableWidgetItem(defaults[r][c]);
                 it->setTextAlignment(Qt::AlignCenter);
                 if (c == 5) {
-                    it->setForeground(QColor("#EF4444"));
+                    it->setForeground(QColor("#F87171"));
                 }
                 m_listenersTable->setItem(r, c, it);
             }
@@ -3205,7 +3927,11 @@ private:
             });
             auto *btnBrowse = new QPushButton("Browse", panel);
             btnBrowse->setObjectName("SecondaryBtn");
-            btnBrowse->setFixedWidth(68);
+            btnBrowse->setIcon(makeCielIcon(dialogTitle.contains("Socket") ? CielIconKind::SocketPlug : CielIconKind::FolderAmber,
+                                            dialogTitle.contains("Socket") ? QColor("#9CA3B2") : QColor("#D99B38"),
+                                            QColor(), 14));
+            btnBrowse->setIconSize(QSize(14, 14));
+            btnBrowse->setFixedWidth(84);
             connect(btnBrowse, &QPushButton::clicked, this, [this, editOut, dialogTitle]() {
                 QString chosen;
                 if (dialogTitle.contains("Socket")) {
@@ -3237,9 +3963,13 @@ private:
 
         auto *applyBtn = new QPushButton("Apply && Sync", panel);
         applyBtn->setObjectName("PrimaryBtn");
+        applyBtn->setIcon(makeCielIcon(CielIconKind::SyncRefresh, QColor("#E6E8EE"), QColor(), 14));
+        applyBtn->setIconSize(QSize(14, 14));
         applyBtn->setToolTip("Apply Field Target Paths and run a full host sync across Tempest + Tanuki");
         auto *clearBtn = new QPushButton("Reset Auto", panel);
         clearBtn->setObjectName("SecondaryBtn");
+        clearBtn->setIcon(makeCielIcon(CielIconKind::SlidersOptions, QColor("#9CA3B2"), QColor(), 14));
+        clearBtn->setIconSize(QSize(14, 14));
         clearBtn->setToolTip("Clear custom target paths and revert to host auto-discovery");
         connect(applyBtn, &QPushButton::clicked, this, [this]() {
             runFullSync(false);
@@ -3330,11 +4060,76 @@ private:
         }
     }
 
+    bool promptStyledInput(const QString &title,
+                           const QString &label,
+                           const QString &placeholder,
+                           const QString &defaultValue,
+                           QLineEdit::EchoMode echoMode,
+                           bool useMono,
+                           bool allowEmpty,
+                           const QString &primaryBtnText,
+                           bool dangerPrimary,
+                           QString &outValue) {
+        QDialog dlg(this);
+        dlg.setObjectName("ModuleModal");
+        dlg.setWindowTitle(title);
+        dlg.setMinimumWidth(460);
+        auto *vbox = new QVBoxLayout(&dlg);
+        vbox->setContentsMargins(14, 12, 14, 12);
+        vbox->setSpacing(10);
+
+        auto *lbl = new QLabel(label, &dlg);
+        lbl->setWordWrap(true);
+        vbox->addWidget(lbl);
+
+        auto *edit = new QLineEdit(&dlg);
+        edit->setEchoMode(echoMode);
+        edit->setPlaceholderText(placeholder);
+        edit->setText(defaultValue);
+        if (useMono) {
+            edit->setFont(resolveMonoFont(9.0));
+        }
+        vbox->addWidget(edit);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addStretch(1);
+        auto *btnCancel = new QPushButton("Cancel", &dlg);
+        btnCancel->setObjectName("SecondaryBtn");
+        auto *btnOk = new QPushButton(primaryBtnText, &dlg);
+        btnOk->setObjectName(dangerPrimary ? "DangerBtn" : "PrimaryBtn");
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(btnOk, &QPushButton::clicked, &dlg, [&]() {
+            if (!allowEmpty && edit->text().trimmed().isEmpty()) {
+                edit->setFocus();
+                return;
+            }
+            dlg.accept();
+        });
+        btnRow->addWidget(btnCancel);
+        btnRow->addWidget(btnOk);
+        vbox->addLayout(btnRow);
+
+        edit->setFocus();
+        if (dlg.exec() != QDialog::Accepted) {
+            return false;
+        }
+        outValue = (echoMode == QLineEdit::Password) ? edit->text() : edit->text().trimmed();
+        return allowEmpty || !outValue.isEmpty();
+    }
+
     void promptVaultUnlock() {
-        bool ok = false;
-        const QString pass = QInputDialog::getText(
-            this, "Unlock Shuna Vault", "Enter Shuna vault passphrase:", QLineEdit::Password, QString(), &ok);
-        if (!ok || pass.isEmpty()) {
+        QString pass;
+        if (!promptStyledInput(
+                "Unlock Shuna Vault",
+                "Enter Shuna Argon2id vault passphrase to unlock encrypted PostgreSQL fleet operations:",
+                "Vault passphrase",
+                QString(),
+                QLineEdit::Password,
+                false,
+                false,
+                "Unlock Vault",
+                false,
+                pass)) {
             return;
         }
         appendCommandEcho("[GUI -> CLI] unlock ********");
@@ -3353,12 +4148,18 @@ private:
     }
 
     void promptVaultRotate() {
-        bool ok = false;
-        const QString pass = QInputDialog::getText(
-            this, "Online Shuna DEK Rotation",
-            "Optional new vault passphrase (leave empty to re-key with active passphrase):",
-            QLineEdit::Password, QString(), &ok);
-        if (!ok) {
+        QString pass;
+        if (!promptStyledInput(
+                "Online Shuna DEK Rotation",
+                "Optional new vault passphrase (leave empty to re-key with the active unlocked passphrase):",
+                "Leave blank to keep active passphrase",
+                QString(),
+                QLineEdit::Password,
+                false,
+                true,
+                "Rotate DEK",
+                false,
+                pass)) {
             return;
         }
         appendCommandEcho(pass.isEmpty() ? "[GUI -> CLI] rotate" : "[GUI -> CLI] rotate ********");
@@ -3372,12 +4173,18 @@ private:
     }
 
     void promptBackupExport() {
-        bool ok = false;
-        const QString name = QInputDialog::getText(
-            this, "Export Encrypted SHUNAS1 Backup",
-            "Backup filename (confined under <workDir>/backups):",
-            QLineEdit::Normal, "ciel-fleet.shunas1", &ok).trimmed();
-        if (!ok) {
+        QString name;
+        if (!promptStyledInput(
+                "Export Encrypted SHUNAS1 Backup",
+                "Backup filename (confined under teamserver <workDir>/backups):",
+                "ciel-fleet.shunas1",
+                "ciel-fleet.shunas1",
+                QLineEdit::Normal,
+                true,
+                false,
+                "Export Backup",
+                false,
+                name)) {
             return;
         }
         appendCommandEcho("[GUI -> CLI] backup " + name);
@@ -3390,27 +4197,102 @@ private:
     }
 
     void promptSessionIssue() {
-        bool ok = false;
-        const QString fp = QInputDialog::getText(
-            this, "Issue Cert-Bound Session Token",
-            "Target mTLS Client Certificate SHA-256 Fingerprint (64 lowercase hex chars):",
-            QLineEdit::Normal, QString(), &ok).trimmed();
-        if (!ok || fp.isEmpty()) {
+        QDialog dlg(this);
+        dlg.setObjectName("ModuleModal");
+        dlg.setWindowTitle("Issue Cert-Bound Session Token");
+        dlg.setMinimumWidth(520);
+        auto *vbox = new QVBoxLayout(&dlg);
+        vbox->setContentsMargins(14, 12, 14, 12);
+        vbox->setSpacing(10);
+
+        auto *form = new QFormLayout();
+        auto *fpEdit = new QLineEdit(&dlg);
+        fpEdit->setFont(resolveMonoFont(9.0));
+        fpEdit->setPlaceholderText("64 lowercase hex chars (SHA-256 of mTLS client certificate)");
+        auto *serialEdit = new QLineEdit(&dlg);
+        serialEdit->setFont(resolveMonoFont(9.0));
+        serialEdit->setPlaceholderText("Hex serial (required for secondary certs, e.g. 02 or a4:19)");
+        form->addRow("Cert SHA-256 FP:", fpEdit);
+        form->addRow("Cert Serial (Hex):", serialEdit);
+        vbox->addLayout(form);
+
+        auto *errLbl = new QLabel(&dlg);
+        errLbl->setObjectName("InlineErrorLabel");
+        errLbl->setVisible(false);
+        vbox->addWidget(errLbl);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addStretch(1);
+        auto *btnCancel = new QPushButton("Cancel", &dlg);
+        btnCancel->setObjectName("SecondaryBtn");
+        auto *btnIssue = new QPushButton("Issue Token", &dlg);
+        btnIssue->setObjectName("PrimaryBtn");
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(btnIssue, &QPushButton::clicked, &dlg, [&]() {
+            if (fpEdit->text().trimmed().isEmpty()) {
+                errLbl->setText("Client certificate SHA-256 fingerprint is required.");
+                errLbl->setVisible(true);
+                fpEdit->setFocus();
+                return;
+            }
+            dlg.accept();
+        });
+        btnRow->addWidget(btnCancel);
+        btnRow->addWidget(btnIssue);
+        vbox->addLayout(btnRow);
+
+        if (dlg.exec() != QDialog::Accepted) {
             return;
         }
-        handleOperativeCommand("session_issue " + fp);
+        const QString fp = fpEdit->text().trimmed();
+        const QString serial = serialEdit->text().trimmed();
+        handleOperativeCommand(serial.isEmpty() ? ("session_issue " + fp) : QString("session_issue %1 %2").arg(fp, serial));
     }
 
     void promptCertRevoke() {
-        bool ok = false;
-        const QString serial = QInputDialog::getText(
-            this, "Revoke mTLS Client Certificate",
-            "Certificate serial (hex) and optional reason (e.g. <serial_hex> key_compromise):",
-            QLineEdit::Normal, QString(), &ok).trimmed();
-        if (!ok || serial.isEmpty()) {
+        QDialog dlg(this);
+        dlg.setObjectName("ModuleModal");
+        dlg.setWindowTitle("Revoke mTLS Client Certificate");
+        dlg.setMinimumWidth(480);
+        auto *vbox = new QVBoxLayout(&dlg);
+        vbox->setContentsMargins(14, 12, 14, 12);
+        vbox->setSpacing(10);
+
+        auto *form = new QFormLayout();
+        auto *serialEdit = new QLineEdit(&dlg);
+        serialEdit->setFont(resolveMonoFont(9.0));
+        serialEdit->setPlaceholderText("Certificate serial hex (e.g. 02 or 00:2a)");
+        auto *reasonCombo = new QComboBox(&dlg);
+        reasonCombo->setEditable(true);
+        reasonCombo->addItems({"key_compromise", "affiliation_changed", "superseded", "cessation_of_operation"});
+        form->addRow("Cert Serial (Hex):", serialEdit);
+        form->addRow("Revocation Reason:", reasonCombo);
+        vbox->addLayout(form);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addStretch(1);
+        auto *btnCancel = new QPushButton("Cancel", &dlg);
+        btnCancel->setObjectName("SecondaryBtn");
+        auto *btnRevoke = new QPushButton("Revoke Certificate", &dlg);
+        btnRevoke->setObjectName("DangerBtn");
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(btnRevoke, &QPushButton::clicked, &dlg, [&]() {
+            if (serialEdit->text().trimmed().isEmpty()) {
+                serialEdit->setFocus();
+                return;
+            }
+            dlg.accept();
+        });
+        btnRow->addWidget(btnCancel);
+        btnRow->addWidget(btnRevoke);
+        vbox->addLayout(btnRow);
+
+        if (dlg.exec() != QDialog::Accepted) {
             return;
         }
-        handleOperativeCommand("cert_revoke " + serial);
+        const QString serial = serialEdit->text().trimmed();
+        const QString reason = reasonCombo->currentText().trimmed();
+        handleOperativeCommand(reason.isEmpty() ? ("cert_revoke " + serial) : QString("cert_revoke %1 %2").arg(serial, reason));
     }
 
     void openTanukiModuleModal(const QString &subcmd) {
@@ -3466,10 +4348,12 @@ private:
 
         if (subcmd == "keytab") {
             argEdit->setText(!m_committedKeytab.isEmpty() ? m_committedKeytab : m_resolvedKeytab);
+            argEdit->setPlaceholderText("Path to Kerberos keytab file");
         } else if (subcmd == "config") {
             argEdit->setText("--realm CORP.LOCAL --kdc 192.168.56.106");
         } else if (subcmd == "triage") {
             argEdit->setText("SKEW");
+            argEdit->setPlaceholderText("Error keyword or code e.g. SKEW, KDC_ERR_PREAUTH_FAILED, NOKEY");
         } else if (subcmd == "auth") {
             const QString kt = !m_committedKeytab.isEmpty() ? m_committedKeytab : m_resolvedKeytab;
             argEdit->setText(QString("--keytab %1 --principal host/app@CORP.LOCAL --kdc 192.168.56.106").arg(kt));
@@ -3478,8 +4362,25 @@ private:
         } else if (subcmd == "ldap") {
             argEdit->setText("--host dc01.corp.local --realm CORP.LOCAL --query all");
         } else if (subcmd == "blast") {
+            argEdit->setPlaceholderText("Optional --keytab <path> or --ccache <path>");
             if (!m_committedKeytab.isEmpty()) argEdit->setText("--keytab " + m_committedKeytab);
             else if (!m_committedCcache.isEmpty()) argEdit->setText("--ccache " + m_committedCcache);
+        } else if (subcmd == "doctor") {
+            argEdit->setPlaceholderText("Optional extra flags e.g. --ad-enctypes 0x18 --ad-kvno 3");
+        } else if (subcmd == "fix") {
+            argEdit->setPlaceholderText("Optional target paths or extra fix arguments");
+        } else if (subcmd == "nhi") {
+            argEdit->setPlaceholderText("Optional workload JWT path or --subject / --audience / --scope flags");
+        } else if (subcmd == "token") {
+            argEdit->setPlaceholderText("Path to workload JWT token file to validate");
+        } else if (subcmd == "adcs") {
+            argEdit->setPlaceholderText("Path to exported AD CS templates JSON file");
+        } else if (subcmd == "pac") {
+            argEdit->setPlaceholderText("Path to MS-PAC binary / NDR dump file");
+        } else if (subcmd == "shadow") {
+            argEdit->setPlaceholderText("Hex-encoded msDS-KeyCredentialLink blob");
+        } else if (subcmd == "kcm") {
+            argEdit->setPlaceholderText("Path to SSSD KCM secrets or ccache snapshot");
         }
 
         form->addRow("Module Arguments:", argEdit);
@@ -3510,6 +4411,7 @@ private:
         auto *prevLay = new QVBoxLayout(prevPage);
         auto *previewEdit = new QPlainTextEdit(prevPage);
         previewEdit->setReadOnly(true);
+        previewEdit->setFont(resolveMonoFont(9.0));
         prevLay->addWidget(previewEdit);
 
         auto buildArgsList = [&]() -> QStringList {
@@ -3563,6 +4465,20 @@ private:
 
         connect(tabs, &QTabWidget::currentChanged, &dlg, [&](int) { updatePreview(); });
         connect(argEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(chkOpsec, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(adEnctypeEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(adKvnoEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(chkApply, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(chkEnforceAes, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(chkFast, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(armorEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(chkCtypes, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(chkSsl, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(tlsModeCombo, &QComboBox::currentIndexChanged, &dlg, [&](int) { updatePreview(); });
+        connect(verifyCaEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(nhiModeCombo, &QComboBox::currentIndexChanged, &dlg, [&](int) { updatePreview(); });
+        connect(chkLive, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
+        connect(endpointEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
         updatePreview();
 
         tabs->addTab(optPage, "Options");
@@ -3633,6 +4549,7 @@ private:
         auto *prevLay = new QVBoxLayout(prevPage);
         auto *previewEdit = new QPlainTextEdit(prevPage);
         previewEdit->setReadOnly(true);
+        previewEdit->setFont(resolveMonoFont(9.0));
         prevLay->addWidget(previewEdit);
 
         auto buildPayload = [&](QString &cliOut) -> QJsonObject {
@@ -3676,6 +4593,9 @@ private:
         };
         connect(tabs, &QTabWidget::currentChanged, &dlg, [&](int) { updatePreview(); });
         connect(pathEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(auxEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(warnEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        connect(chkFlag, &QCheckBox::toggled, &dlg, [&](bool) { updatePreview(); });
         updatePreview();
 
         tabs->addTab(optPage, "Options");
@@ -3711,13 +4631,18 @@ private:
     }
 
     void promptTanukiPurge() {
-        bool ok = false;
-        const QString val = QInputDialog::getText(
-                                this, "Tanuki Credential Cache Purge",
-                                "Target credential artifact path or --all (shreds discovered ticket caches & temp configs):",
-                                QLineEdit::Normal, "--all", &ok)
-                                .trimmed();
-        if (!ok || val.isEmpty()) {
+        QString val;
+        if (!promptStyledInput(
+                "Tanuki Credential Cache Purge",
+                "Target credential artifact path or --all (shreds discovered ticket caches & temp configs):",
+                "--all or /path/to/ccache",
+                "--all",
+                QLineEdit::Normal,
+                true,
+                false,
+                "Review Purge",
+                true,
+                val)) {
             return;
         }
         const auto confirm = QMessageBox::warning(
@@ -4162,9 +5087,17 @@ private:
             if (tokens.size() >= 2) {
                 pass = tokens.mid(1).join(' ');
             } else {
-                bool okPass = false;
-                pass = QInputDialog::getText(this, "Unlock Shuna Vault", "Vault passphrase:", QLineEdit::Password, QString(), &okPass);
-                if (!okPass || pass.isEmpty()) {
+                if (!promptStyledInput(
+                        "Unlock Shuna Vault",
+                        "Enter Shuna Argon2id vault passphrase:",
+                        "Vault passphrase",
+                        QString(),
+                        QLineEdit::Password,
+                        false,
+                        false,
+                        "Unlock Vault",
+                        false,
+                        pass)) {
                     return;
                 }
             }
@@ -4413,8 +5346,8 @@ private:
         const QColor badgeAccent = cielStatusColor(snap.status);
         const bool isAlert = isAlertSnapshot(snap);
         const bool isWarn = !isAlert && isWarningLogEntry(QString(), snap.status);
-        const QColor col0IconColor = isAlert ? QColor("#EF4444") : (isWarn ? QColor("#F59E0B") : QColor("#60A5FA"));
-        const QColor col0TextColor = isAlert ? QColor("#EF4444") : QColor("#F3F4F6");
+        const QColor col0IconColor = isAlert ? QColor("#F87171") : (isWarn ? QColor("#FBBF24") : QColor("#5B8DEF"));
+        const QColor col0TextColor = isAlert ? QColor("#EF4444") : QColor("#E6E8EE");
         for (int c = 0; c < cells.size(); ++c) {
             QTableWidgetItem *item = m_sessionTable->item(targetRow, c);
             if (!item) {
@@ -4427,12 +5360,12 @@ private:
                 item->setToolTip(QString("%1 (%2) :: %3\nDetail: %4").arg(snap.id, snap.operative, cells.at(c), snap.detail));
             }
             if (c == 0) {
-                item->setIcon(makeOperativeBadgeIcon(col0IconColor));
+                item->setIcon(makeCielIcon(CielIconKind::OperativeChip, col0IconColor, QColor(), 16));
                 item->setForeground(col0TextColor);
             } else if (c == 5) {
                 item->setForeground(badgeAccent);
             } else {
-                item->setForeground(QColor("#F3F4F6"));
+                item->setForeground(QColor("#E6E8EE"));
             }
         }
         if (m_filterEdit && !m_filterEdit->text().trimmed().isEmpty()) {
@@ -5011,14 +5944,18 @@ private:
         QPointer<CielWindow> safeThis(this);
         if (m_statusRpcLabel) {
             m_statusRpcLabel->setText("RPC: " + action);
-            m_statusRpcLabel->setStyleSheet("color: #60A5FA; font-weight: bold;");
+            m_statusRpcLabel->setProperty("rpcActive", true);
+            m_statusRpcLabel->style()->unpolish(m_statusRpcLabel);
+            m_statusRpcLabel->style()->polish(m_statusRpcLabel);
         }
         struct RpcIdleReset {
             QPointer<CielWindow> win;
             ~RpcIdleReset() {
                 if (win && win->m_statusRpcLabel) {
                     win->m_statusRpcLabel->setText("RPC: IDLE");
-                    win->m_statusRpcLabel->setStyleSheet("color: #9CA3AF;");
+                    win->m_statusRpcLabel->setProperty("rpcActive", false);
+                    win->m_statusRpcLabel->style()->unpolish(win->m_statusRpcLabel);
+                    win->m_statusRpcLabel->style()->polish(win->m_statusRpcLabel);
                 }
             }
         } rpcReset{safeThis};
@@ -5415,12 +6352,19 @@ private:
 
     QStackedWidget *m_workspaceStack = nullptr;
     QList<QPushButton *> m_railBtns;
+    QPushButton *m_btnTableMode = nullptr;
+    QPushButton *m_btnGraphMode = nullptr;
+    QPushButton *m_btnInspectToggle = nullptr;
     QLabel *m_kpiTransportBadge = nullptr;
     QLabel *m_kpiVaultBadge = nullptr;
     QLabel *m_kpiOpsBadge = nullptr;
     QLabel *m_kpiFreshnessLabel = nullptr;
     QWidget *m_vaultBanner = nullptr;
     QLabel *m_vaultBannerLabel = nullptr;
+    QLabel *m_fleetEmptyBanner = nullptr;
+    QPushButton *m_btnVaultUnlock = nullptr;
+    QPushButton *m_btnVaultRotate = nullptr;
+    QPushButton *m_btnVaultBackup = nullptr;
 
     QSplitter *m_topBotSplitter = nullptr;
     QSplitter *m_topSplit = nullptr;
@@ -5476,9 +6420,7 @@ private:
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
-    QFont globalMono("DejaVu Sans Mono", 9);
-    globalMono.setStyleHint(QFont::Monospace);
-    app.setFont(globalMono);
+    app.setFont(resolveUiFont(9.0));
     app.setApplicationName("Ciel");
     app.setApplicationVersion("1.0.0");
     app.setStyleSheet(applyCielStylesheet());

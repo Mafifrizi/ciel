@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mafifrizi/shuna/pkg/contract"
@@ -32,7 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed migrations/001_init.sql
+//go:embed migrations/*.sql
 var migrationsFS embed.FS
 
 const rotationBatchSize = 1000
@@ -124,34 +125,20 @@ type vaultDiskMeta struct {
 	Keys              map[uint32]*vault.KeyRecord `json:"keys"`
 }
 
+var errNoLockoutChange = errors.New("no lockout change")
+
 // pgLockoutStore persists vault_lockout state durably in PostgreSQL (and mirrors to fileStore if set).
 type pgLockoutStore struct {
 	pool              *pgxpool.Pool
-	strictLockoutWipe bool
+	strictLockoutWipe atomic.Bool
 	fileStore         *vault.FileLockoutStore
 	lockoutFilePath   string
 }
 
-func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var failed int
-	var lockedUntil, lastFailure *time.Time
-	err := s.pool.QueryRow(ctx, `
-		SELECT failed_attempts, locked_until, last_failure_at
-		FROM vault_lockout
-		WHERE id = 1
-	`).Scan(&failed, &lockedUntil, &lastFailure)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return vault.LockoutState{}, nil
-		}
-		return vault.LockoutState{}, fmt.Errorf("load vault_lockout: %w", err)
-	}
-
+func (s *pgLockoutStore) buildState(failed int, lockedUntil, lastFailure *time.Time, wipedLocked bool) vault.LockoutState {
 	st := vault.LockoutState{
 		FailedAttempts: failed,
+		WipedLocked:    wipedLocked,
 	}
 	if lockedUntil != nil {
 		st.LockedUntil = lockedUntil.UTC()
@@ -163,21 +150,147 @@ func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
 		backoff := time.Duration(1<<(st.FailedAttempts-1)) * time.Second
 		st.CooldownUntil = st.LastFailureAt.Add(backoff)
 	}
-	if s.strictLockoutWipe && st.FailedAttempts >= vault.MaxFailedAttempts {
+	if s.strictLockoutWipe.Load() && st.FailedAttempts >= vault.MaxFailedAttempts {
 		st.WipedLocked = true
 	}
+	return st
+}
 
-	// If local administrator cleared lockout via `shuna unlock-reset --vault ...` offline,
-	// lockout.json will have failed_attempts == 0 with a newer mtime than last_failure_at.
-	if s.fileStore != nil && s.lockoutFilePath != "" && st.FailedAttempts >= vault.MaxFailedAttempts {
-		if info, serr := os.Stat(s.lockoutFilePath); serr == nil {
-			if st.LastFailureAt.IsZero() || info.ModTime().UTC().After(st.LastFailureAt.Add(time.Second)) {
-				if fst, ferr := s.fileStore.Load(); ferr == nil && fst.FailedAttempts == 0 && !fst.WipedLocked {
-					_ = s.Save(vault.LockoutState{})
-					return vault.LockoutState{}, nil
-				}
-			}
+// hasOfflineReset checks whether an administrator cleared lockout offline via `shuna unlock-reset`.
+func (s *pgLockoutStore) hasOfflineReset(st vault.LockoutState) bool {
+	if st.FailedAttempts == 0 && !st.WipedLocked {
+		return false
+	}
+	if s.fileStore == nil || s.lockoutFilePath == "" {
+		return false
+	}
+	info, serr := os.Stat(s.lockoutFilePath)
+	if serr != nil {
+		return false
+	}
+	fst, ferr := s.fileStore.Load()
+	if ferr != nil || fst.FailedAttempts != 0 || fst.WipedLocked {
+		return false
+	}
+	if !fst.ResetAt.IsZero() {
+		return st.LastFailureAt.IsZero() || !fst.ResetAt.UTC().Add(time.Microsecond).Before(st.LastFailureAt.UTC())
+	}
+	return st.LastFailureAt.IsZero() || info.ModTime().UTC().After(st.LastFailureAt.UTC())
+}
+
+func (s *pgLockoutStore) updateLocked(ctx context.Context, checkOffline bool, fn func(vault.LockoutState) (vault.LockoutState, error)) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin vault_lockout tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO vault_lockout (id, failed_attempts, wiped_locked)
+		VALUES (1, 0, FALSE)
+		ON CONFLICT (id) DO NOTHING
+	`); err != nil {
+		return fmt.Errorf("ensure vault_lockout row: %w", err)
+	}
+
+	var failed int
+	var lockedUntil, lastFailure *time.Time
+	var wipedLocked bool
+	if err := tx.QueryRow(ctx, `
+		SELECT failed_attempts, locked_until, last_failure_at, wiped_locked
+		FROM vault_lockout
+		WHERE id = 1
+		FOR UPDATE
+	`).Scan(&failed, &lockedUntil, &lastFailure, &wipedLocked); err != nil {
+		return fmt.Errorf("lock vault_lockout row: %w", err)
+	}
+
+	cur := s.buildState(failed, lockedUntil, lastFailure, wipedLocked)
+	if checkOffline && s.hasOfflineReset(cur) {
+		cur = vault.LockoutState{}
+	}
+
+	next, err := fn(cur)
+	if err != nil {
+		return err
+	}
+
+	var lockedPtr, lastPtr *time.Time
+	if !next.LockedUntil.IsZero() {
+		t := next.LockedUntil.UTC().Truncate(time.Microsecond)
+		lockedPtr = &t
+	}
+	if !next.LastFailureAt.IsZero() {
+		t := next.LastFailureAt.UTC().Truncate(time.Microsecond)
+		lastPtr = &t
+	}
+	if s.strictLockoutWipe.Load() && next.FailedAttempts >= vault.MaxFailedAttempts {
+		next.WipedLocked = true
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE vault_lockout
+		SET failed_attempts = $1,
+		    locked_until = $2,
+		    last_failure_at = $3,
+		    wiped_locked = $4
+		WHERE id = 1
+	`, next.FailedAttempts, lockedPtr, lastPtr, next.WipedLocked); err != nil {
+		return fmt.Errorf("update vault_lockout: %w", err)
+	}
+
+	if s.fileStore != nil {
+		if err := s.fileStore.Save(next); err != nil {
+			return fmt.Errorf("mirror lockout.json: %w", err)
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		if s.fileStore != nil {
+			_ = s.fileStore.Save(cur)
+		}
+		return fmt.Errorf("commit vault_lockout: %w", err)
+	}
+	return nil
+}
+
+func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var failed int
+	var lockedUntil, lastFailure *time.Time
+	var wipedLocked bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT failed_attempts, locked_until, last_failure_at, wiped_locked
+		FROM vault_lockout
+		WHERE id = 1
+	`).Scan(&failed, &lockedUntil, &lastFailure, &wipedLocked)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return vault.LockoutState{}, nil
+		}
+		return vault.LockoutState{}, fmt.Errorf("load vault_lockout: %w", err)
+	}
+
+	st := s.buildState(failed, lockedUntil, lastFailure, wipedLocked)
+	if s.hasOfflineReset(st) {
+		var latest vault.LockoutState
+		uerr := s.updateLocked(ctx, false, func(cur vault.LockoutState) (vault.LockoutState, error) {
+			if s.hasOfflineReset(cur) {
+				latest = vault.LockoutState{}
+				return vault.LockoutState{}, nil
+			}
+			latest = cur
+			return cur, errNoLockoutChange
+		})
+		if uerr == nil {
+			return vault.LockoutState{}, nil
+		}
+		if errors.Is(uerr, errNoLockoutChange) {
+			return latest, nil
+		}
+		return vault.LockoutState{}, uerr
 	}
 	return st, nil
 }
@@ -185,32 +298,18 @@ func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
 func (s *pgLockoutStore) Save(st vault.LockoutState) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	return s.updateLocked(ctx, false, func(vault.LockoutState) (vault.LockoutState, error) {
+		return st, nil
+	})
+}
 
-	var lockedPtr, lastPtr *time.Time
-	if !st.LockedUntil.IsZero() {
-		t := st.LockedUntil.UTC()
-		lockedPtr = &t
+func (s *pgLockoutStore) Update(fn func(vault.LockoutState) (vault.LockoutState, error)) error {
+	if fn == nil {
+		return nil
 	}
-	if !st.LastFailureAt.IsZero() {
-		t := st.LastFailureAt.UTC()
-		lastPtr = &t
-	}
-
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO vault_lockout (id, failed_attempts, locked_until, last_failure_at)
-		VALUES (1, $1, $2, $3)
-		ON CONFLICT (id) DO UPDATE SET
-			failed_attempts = EXCLUDED.failed_attempts,
-			locked_until = EXCLUDED.locked_until,
-			last_failure_at = EXCLUDED.last_failure_at
-	`, st.FailedAttempts, lockedPtr, lastPtr)
-	if err != nil {
-		return fmt.Errorf("save vault_lockout: %w", err)
-	}
-	if s.fileStore != nil {
-		_ = s.fileStore.Save(st)
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.updateLocked(ctx, true, fn)
 }
 
 type Storage struct {
@@ -509,9 +608,12 @@ func NewStorage(ctx context.Context, rawDSN, pkiDir, vaultDir string, initialPas
 }
 
 func (st *Storage) applyMigrations(ctx context.Context) error {
-	sqlBytes, err := migrationsFS.ReadFile("migrations/001_init.sql")
-	if err != nil {
-		return fmt.Errorf("read embedded migration: %w", err)
+	migrations := []struct {
+		version int
+		file    string
+	}{
+		{1, "migrations/001_init.sql"},
+		{2, "migrations/002_lockout_wiped_locked.sql"},
 	}
 	tx, err := st.pool.Begin(ctx)
 	if err != nil {
@@ -519,11 +621,17 @@ func (st *Storage) applyMigrations(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
-		return fmt.Errorf("apply 001_init.sql: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES (1) ON CONFLICT DO NOTHING`); err != nil {
-		return fmt.Errorf("record schema_migrations v1: %w", err)
+	for _, m := range migrations {
+		sqlBytes, rerr := migrationsFS.ReadFile(m.file)
+		if rerr != nil {
+			return fmt.Errorf("read embedded migration %s: %w", m.file, rerr)
+		}
+		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
+			return fmt.Errorf("apply %s: %w", m.file, err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING`, m.version); err != nil {
+			return fmt.Errorf("record schema_migrations v%d: %w", m.version, err)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -532,12 +640,13 @@ func (st *Storage) lockoutStore() vault.LockoutStore {
 	lockPath := filepath.Join(st.vaultDir, vault.LockoutFileName)
 	fileStore := vault.NewFileLockoutStore(lockPath)
 	if st.pool != nil {
-		return &pgLockoutStore{
-			pool:              st.pool,
-			strictLockoutWipe: st.strictLockoutWipe,
-			fileStore:         fileStore,
-			lockoutFilePath:   lockPath,
+		pg := &pgLockoutStore{
+			pool:            st.pool,
+			fileStore:       fileStore,
+			lockoutFilePath: lockPath,
 		}
+		pg.strictLockoutWipe.Store(st.strictLockoutWipe)
+		return pg
 	}
 	return fileStore
 }
@@ -547,10 +656,11 @@ func (st *Storage) initOrOpenVault(ctx context.Context, initialPassphrase []byte
 		return nil
 	}
 	vaultPath := filepath.Join(st.vaultDir, vault.VaultFileName)
+	lockStore := st.lockoutStore()
 	opts := vault.Options{
 		StrictMlock:       st.strictMlock,
 		StrictLockoutWipe: st.strictLockoutWipe,
-		LockoutStore:      st.lockoutStore(),
+		LockoutStore:      lockStore,
 	}
 
 	_, statErr := os.Stat(vaultPath)
@@ -558,6 +668,12 @@ func (st *Storage) initOrOpenVault(ctx context.Context, initialPassphrase []byte
 		v, err := vault.OpenVault(st.vaultDir, opts)
 		if err != nil {
 			return fmt.Errorf("open shuna vault: %w", err)
+		}
+		if v.StrictLockoutWipe() {
+			st.strictLockoutWipe = true
+			if pgStore, ok := lockStore.(*pgLockoutStore); ok {
+				pgStore.strictLockoutWipe.Store(true)
+			}
 		}
 		st.vault = v
 		if st.pool != nil {
@@ -917,6 +1033,34 @@ func (st *Storage) UpsertHost(ctx context.Context, hostID, status string, meta H
 	return err
 }
 
+func diffOperativeID(r Row) string {
+	if r.ID == "OP-06" && strings.TrimSpace(r.Module) != "" {
+		return "OP-06:" + strings.ToLower(strings.TrimSpace(r.Module))
+	}
+	return r.ID
+}
+
+func (st *Storage) RecordTanukiExecAudit(ctx context.Context, rawHostID string, row Row, logBody string) error {
+	if st.pool == nil || st.VaultLocked() || st.vault == nil {
+		return nil
+	}
+	hostID, err := st.ComputeHostID(rawHostID)
+	if err != nil {
+		return err
+	}
+	diffID := diffOperativeID(row)
+	sig := fmt.Sprintf("%s|%d|%s", row.Status, row.ExitCode, row.Target)
+	st.diffMu.Lock()
+	st.lastDiff[hostID+"|"+diffID] = sig
+	st.diffMu.Unlock()
+
+	return st.RecordAuditEvent(ctx, hostID, diffID, severityForRow(row.Status, row.ExitCode), row.ExitCode, row.Status, AuditDetail{
+		Action:  "tanuki_exec:" + row.Module,
+		Summary: row.Detail,
+		Body:    logBody,
+	})
+}
+
 func (st *Storage) RecordFullSync(ctx context.Context, hostID string, meta HostMeta, overallStatus string, rows []Row, logs []string) error {
 	if st.pool == nil {
 		return nil
@@ -965,8 +1109,9 @@ func (st *Storage) RecordFullSync(ctx context.Context, hostID string, meta HostM
 		if r.ID == "OP-04" {
 			stable = r.PermOrTTL
 		}
+		diffID := diffOperativeID(r)
 		sig := fmt.Sprintf("%s|%d|%s", r.Status, r.ExitCode, stable)
-		diffKey := hostID + "|" + r.ID
+		diffKey := hostID + "|" + diffID
 
 		st.diffMu.Lock()
 		changed := st.lastDiff[diffKey] != sig
@@ -981,7 +1126,7 @@ func (st *Storage) RecordFullSync(ctx context.Context, hostID string, meta HostM
 			if i < len(logs) {
 				logBody = logs[i]
 			}
-			if err := st.RecordAuditEvent(ctx, hostID, r.ID, sev, r.ExitCode, r.Status, AuditDetail{
+			if err := st.RecordAuditEvent(ctx, hostID, diffID, sev, r.ExitCode, r.Status, AuditDetail{
 				Action:  "full_sync",
 				Summary: fmt.Sprintf("%s %s -> %s", r.Operative, r.Module, r.Status),
 				Body:    logBody,
@@ -1127,7 +1272,7 @@ func (st *Storage) ListHistory(ctx context.Context, hostID, operativeID string, 
 	evQuery := `
 		SELECT event_id, host_id, operative_id, severity, exit_code, status, detail_enc, key_version, created_at
 		FROM audit_events
-		WHERE ($1 = '' OR host_id = $1) AND ($2 = '' OR operative_id = $2)
+		WHERE ($1 = '' OR host_id = $1) AND ($2 = '' OR operative_id = $2 OR left(operative_id, length($2) + 1) = $2 || ':')
 		ORDER BY event_id DESC
 		LIMIT $3
 	`
@@ -1165,7 +1310,7 @@ func (st *Storage) ListHistory(ctx context.Context, hostID, operativeID string, 
 	snapQuery := `
 		SELECT snapshot_id, host_id, operative_id, exit_code, status, payload_enc, key_version, observed_at
 		FROM telemetry_snapshots
-		WHERE ($1 = '' OR host_id = $1) AND ($2 = '' OR operative_id = $2)
+		WHERE ($1 = '' OR host_id = $1) AND ($2 = '' OR operative_id = $2 OR left(operative_id, length($2) + 1) = $2 || ':')
 		ORDER BY snapshot_id DESC
 		LIMIT $3
 	`

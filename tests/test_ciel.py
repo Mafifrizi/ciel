@@ -6,7 +6,6 @@ import socket
 import ssl
 import struct
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -88,8 +87,9 @@ def build_keytab_v2(realm, comp, enctype=18):
 
 def load_ui_font(size=14):
     candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
     ]
     for c in candidates:
         if Path(c).exists():

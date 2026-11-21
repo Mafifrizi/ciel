@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS vault_lockout (
     id                 INTEGER PRIMARY KEY CHECK (id = 1),
     failed_attempts    INTEGER NOT NULL DEFAULT 0,
     locked_until       TIMESTAMPTZ,
-    last_failure_at    TIMESTAMPTZ
+    last_failure_at    TIMESTAMPTZ,
+    wiped_locked       BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Multi-host fleet registry (host_id is pseudonymous HMAC blind-index; host details encrypted in host_meta_enc)

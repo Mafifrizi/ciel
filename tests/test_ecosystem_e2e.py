@@ -6,7 +6,7 @@ Covers Tiers 1-4 from TEST_INFRA.md across real binaries and live mTLS 1.3 RPC.
 import hashlib
 import json
 import os
-import shutil
+import re
 import socket
 import ssl
 import struct
@@ -23,6 +23,56 @@ TEMPEST_ROOT = SCRATCH_ROOT / "tempest"
 SHUNA_ROOT = SCRATCH_ROOT / "shuna"
 
 BIN_DIR = CIEL_ROOT / "bin"
+
+
+def expected_tanuki_version():
+    pyproject = (TANUKI_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    assert m, "Could not parse tanuki version from pyproject.toml"
+    return m.group(1)
+
+
+def resolve_rust_tanuki_bin():
+    for cand in (BIN_DIR / "tanuki", TANUKI_ROOT / "target" / "release" / "tanuki"):
+        if cand.exists() and os.access(cand, os.X_OK):
+            magic = cand.read_bytes()[:4]
+            if magic == b"\x7fELF":
+                return cand
+    raise AssertionError(
+        f"Real Rust ELF tanuki binary not found (checked {BIN_DIR / 'tanuki'} and {TANUKI_ROOT / 'target' / 'release' / 'tanuki'})"
+    )
+
+
+def cert_serial_hex_from_pem(pem_text):
+    # Extract Subject/Serial from X.509 DER TBSCertificate
+    b64 = "".join(
+        line.strip()
+        for line in pem_text.splitlines()
+        if line.strip() and not line.startswith("-----")
+    )
+    import base64
+    der = base64.b64decode(b64)
+
+    def read_tlv(buf, off):
+        tag = buf[off]
+        off += 1
+        ln = buf[off]
+        off += 1
+        if ln & 0x80:
+            n = ln & 0x7F
+            ln = int.from_bytes(buf[off : off + n], "big")
+            off += n
+        return tag, buf[off : off + ln], off + ln
+
+    _, cert_seq, _ = read_tlv(der, 0)
+    _, tbs_seq, _ = read_tlv(cert_seq, 0)
+    pos = 0
+    tag, _, next_pos = read_tlv(tbs_seq, pos)
+    if tag == 0xA0:  # explicit [0] version
+        pos = next_pos
+    tag, serial_bytes, _ = read_tlv(tbs_seq, pos)
+    assert tag == 0x02, f"Expected INTEGER serial tag, got 0x{tag:02x}"
+    return format(int.from_bytes(serial_bytes, "big"), "x")
 
 
 def run_cmd(args, cwd=None, env=None, timeout=30):
@@ -75,13 +125,14 @@ def build_keytab_v2(realm, comp, enctype=18, key_byte=0x2A):
 
 
 def test_tier1_version_and_cli_parity():
-    # 1. Tanuki Python & Rust version parity (2.1.4)
+    tanuki_ver = expected_tanuki_version()
+    # 1. Tanuki Python & real Rust ELF version parity
     py_ver = run_cmd([sys.executable, "-m", "tanuki", "--version"], cwd=TANUKI_ROOT)
-    assert py_ver.returncode == 0 and "2.1.4" in py_ver.stdout, f"Tanuki Python version mismatch: {py_ver.stdout} {py_ver.stderr}"
+    assert py_ver.returncode == 0 and tanuki_ver in py_ver.stdout, f"Tanuki Python version mismatch: {py_ver.stdout} {py_ver.stderr}"
 
-    rust_tanuki = BIN_DIR / "tanuki"
+    rust_tanuki = resolve_rust_tanuki_bin()
     rs_ver = run_cmd([str(rust_tanuki), "--version"])
-    assert rs_ver.returncode == 0 and "2.1.4" in rs_ver.stdout, f"Tanuki Rust version mismatch: {rs_ver.stdout} {rs_ver.stderr}"
+    assert rs_ver.returncode == 0 and f"tanuki-cli {tanuki_ver}" in rs_ver.stdout, f"Tanuki Rust version mismatch: {rs_ver.stdout} {rs_ver.stderr}"
 
     # 2. Tempest operatives version (1.0.0)
     for op in ("souei", "chronoa", "ranga"):
@@ -100,11 +151,11 @@ def test_tier1_version_and_cli_parity():
     env["QT_QPA_PLATFORM"] = "offscreen"
     cli_res = run_cmd([str(BIN_DIR / "ciel-client"), "--version"], env=env)
     assert cli_res.returncode == 0 and "1.0.0" in cli_res.stdout, f"ciel-client --version failed: {cli_res.stdout}"
-    print("[PASS] Tier 1: All 4 cycles report expected version strings (tanuki 2.1.4, tempest/shuna/ciel 1.0.0)")
+    print(f"[PASS] Tier 1: All 4 cycles report expected version strings (tanuki {tanuki_ver}, tempest/shuna/ciel 1.0.0)")
 
 
 def test_tier2_tanuki_cross_engine_parity():
-    rust_tanuki = str(BIN_DIR / "tanuki")
+    rust_tanuki = str(resolve_rust_tanuki_bin())
     with tempfile.TemporaryDirectory(prefix="tanuki-parity-") as tmp:
         kt_path = Path(tmp) / "svc.keytab"
         kt_bytes, raw_key = build_keytab_v2("CORP.LOCAL", "svc_parity")
@@ -164,10 +215,11 @@ def test_tier3_shuna_and_teamserver_security():
         assert run_cmd([shuna_bin, "issue-cert", "--pki-dir", str(pki_dir), "--cn", "client", "--role", "client"]).returncode == 0
         assert run_cmd([shuna_bin, "issue-cert", "--pki-dir", str(pki_dir), "--cn", "op2", "--role", "client"]).returncode == 0
 
-        # Compute SHA-256 DER fingerprint of op2.crt
+        # Compute SHA-256 DER fingerprint and canonical serial of op2.crt
         pem_text = (pki_dir / "op2.crt").read_text(encoding="utf-8")
         der_bytes = ssl.PEM_cert_to_DER_cert(pem_text)
         op2_fp = hashlib.sha256(der_bytes).hexdigest()
+        op2_serial = cert_serial_hex_from_pem(pem_text)
 
         port = pick_free_port()
         addr = f"127.0.0.1:{port}"
@@ -199,8 +251,12 @@ def test_tier3_shuna_and_teamserver_security():
             r_cross = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "ping"}, ca_crt, cli2_crt, cli2_key)
             assert r_cross["ok"] is False and r_cross["status"] == "UNAUTHORIZED", r_cross
 
-            # Bootstrap client issues session token for op2.crt via session_issue
-            r_issue = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "session_issue", "cert_fp": op2_fp}, ca_crt, cli1_crt, cli1_key)
+            # Secondary session_issue without serial_hex must be rejected
+            r_issue_missing = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "session_issue", "cert_fp": op2_fp}, ca_crt, cli1_crt, cli1_key)
+            assert r_issue_missing["ok"] is False and r_issue_missing["status"] == "USAGE_ERROR", r_issue_missing
+
+            # Bootstrap client issues session token for op2.crt bound to cert_fp + serial_hex
+            r_issue = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "session_issue", "cert_fp": op2_fp, "serial_hex": op2_serial}, ca_crt, cli1_crt, cli1_key)
             assert r_issue["ok"] is True and r_issue["status"] == "ISSUED", r_issue
             op2_token = r_issue["data"]["auth_token"]
 
@@ -208,7 +264,7 @@ def test_tier3_shuna_and_teamserver_security():
             r_op2_ping = mtls_rpc("127.0.0.1", port, {"auth_token": op2_token, "action": "ping"}, ca_crt, cli2_crt, cli2_key)
             assert r_op2_ping["ok"] is True and r_op2_ping["status"] == "READY", r_op2_ping
 
-            r_op2_issue = mtls_rpc("127.0.0.1", port, {"auth_token": op2_token, "action": "session_issue", "cert_fp": op2_fp}, ca_crt, cli2_crt, cli2_key)
+            r_op2_issue = mtls_rpc("127.0.0.1", port, {"auth_token": op2_token, "action": "session_issue", "cert_fp": op2_fp, "serial_hex": op2_serial}, ca_crt, cli2_crt, cli2_key)
             assert r_op2_issue["ok"] is False and r_op2_issue["status"] == "UNAUTHORIZED", r_op2_issue
 
             # Verify --krb5-conf forwarding on tanuki auth
@@ -239,6 +295,18 @@ def test_tier3_shuna_and_teamserver_security():
                 crl_path.write_bytes(saved_crl)
             r_restored = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "ping"}, ca_crt, cli1_crt, cli1_key)
             assert r_restored["ok"] is True and r_restored["status"] == "READY", r_restored
+
+            # Revoke op2.crt via cert_revoke and verify its issued session token is purged
+            r_rev = mtls_rpc("127.0.0.1", port, {"auth_token": bootstrap_token, "action": "cert_revoke", "serial_hex": op2_serial, "reason": "key_compromise"}, ca_crt, cli1_crt, cli1_key)
+            assert r_rev["ok"] is True and r_rev["status"] == "REVOKED", r_rev
+            assert r_rev["data"]["sessions_invalidated"] >= 1, r_rev
+            revoked_rejected = False
+            try:
+                r_after_rev = mtls_rpc("127.0.0.1", port, {"auth_token": op2_token, "action": "ping"}, ca_crt, cli2_crt, cli2_key)
+                revoked_rejected = (r_after_rev.get("ok") is False and r_after_rev.get("status") == "UNAUTHORIZED")
+            except (ssl.SSLError, OSError):
+                revoked_rejected = True
+            assert revoked_rejected, "Expected revoked op2.crt / op2_token to be rejected"
         finally:
             srv.terminate()
             try:

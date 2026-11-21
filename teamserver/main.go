@@ -223,7 +223,7 @@ func validatePurgeTarget(p string) error {
 		return fmt.Errorf("refusing to purge protected system path: %s", cleaned)
 	}
 	protectedPrefixes := []string{
-		"/bin/", "/boot/", "/dev/", "/lib/", "/lib64/",
+		"/bin/", "/boot/", "/dev/", "/etc/", "/lib/", "/lib64/",
 		"/proc/", "/sbin/", "/sys/", "/usr/",
 	}
 	for _, pref := range protectedPrefixes {
@@ -387,8 +387,92 @@ func sanitizedChildEnv(extraEnv ...string) []string {
 	return out
 }
 
+const (
+	maxProcessStdoutBytes = 4 * 1024 * 1024
+	maxProcessStderrBytes = 256 * 1024
+)
+
+type boundedBuffer struct {
+	buf       bytes.Buffer
+	maxBytes  int
+	truncated bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	rem := b.maxBytes - b.buf.Len()
+	if rem > 0 {
+		if len(p) <= rem {
+			_, _ = b.buf.Write(p)
+		} else {
+			_, _ = b.buf.Write(p[:rem])
+			b.truncated = true
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func redactSensitiveArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	secretFlags := map[string]bool{
+		"-p":               true,
+		"--password":       true,
+		"--token":          true,
+		"--subject-token":  true,
+		"--passphrase":     true,
+		"--new-passphrase": true,
+		"--auth-token":     true,
+		"--secret":         true,
+	}
+	out := make([]string, len(args))
+	redactNext := false
+	for i, a := range args {
+		if redactNext {
+			out[i] = "[REDACTED]"
+			redactNext = false
+			continue
+		}
+		if eq := strings.IndexByte(a, '='); eq > 0 {
+			flagPart := strings.ToLower(a[:eq])
+			if secretFlags[flagPart] {
+				out[i] = a[:eq+1] + "[REDACTED]"
+				continue
+			}
+		}
+		if secretFlags[strings.ToLower(a)] {
+			out[i] = a
+			redactNext = true
+			continue
+		}
+		out[i] = a
+	}
+	return out
+}
+
+func redactCommandString(cmd string) string {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return ""
+	}
+	parts, err := splitQuotedArgs(trimmed)
+	if err != nil {
+		return strings.Fields(trimmed)[0] + " [REDACTED_UNPARSED]"
+	}
+	return strings.Join(redactSensitiveArgs(parts), " ")
+}
+
 func (s *Server) runJSONProcess(binPath string, extraEnv []string, args ...string) (map[string]any, int, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return s.runJSONProcessWithTimeout(15*time.Second, binPath, extraEnv, args...)
+}
+
+func (s *Server) runJSONProcessWithTimeout(timeout time.Duration, binPath string, extraEnv []string, args ...string) (map[string]any, int, string, error) {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -396,9 +480,10 @@ func (s *Server) runJSONProcess(binPath string, extraEnv []string, args ...strin
 		cmd.Dir = s.workDir
 	}
 	cmd.Env = sanitizedChildEnv(extraEnv...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &boundedBuffer{maxBytes: maxProcessStdoutBytes}
+	stderr := &boundedBuffer{maxBytes: maxProcessStderrBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 	exitCode := 0
@@ -407,27 +492,30 @@ func (s *Server) runJSONProcess(binPath string, extraEnv []string, args ...strin
 		if errors.As(err, &ee) {
 			exitCode = ee.ExitCode()
 		} else {
-			return nil, -1, stderr.String(), err
+			return nil, -1, stderr.buf.String(), err
 		}
+	}
+	if stdout.truncated {
+		return nil, -1, stderr.buf.String(), fmt.Errorf("process stdout exceeded %d byte cap", maxProcessStdoutBytes)
 	}
 
 	var parsed map[string]any
-	trimmed := bytes.TrimSpace(stdout.Bytes())
+	trimmed := bytes.TrimSpace(stdout.buf.Bytes())
 	if len(trimmed) > 0 {
 		if trimmed[0] == '[' {
 			var arr []any
 			if jErr := json.Unmarshal(trimmed, &arr); jErr != nil {
-				return nil, exitCode, stdout.String() + " " + stderr.String(), jErr
+				return nil, exitCode, stdout.buf.String() + " " + stderr.buf.String(), jErr
 			}
 			parsed = map[string]any{
 				"items": arr,
 				"count": len(arr),
 			}
 		} else if jErr := json.Unmarshal(trimmed, &parsed); jErr != nil {
-			return nil, exitCode, stdout.String() + " " + stderr.String(), jErr
+			return nil, exitCode, stdout.buf.String() + " " + stderr.buf.String(), jErr
 		}
 	}
-	return parsed, exitCode, stderr.String(), nil
+	return parsed, exitCode, stderr.buf.String(), nil
 }
 
 func (s *Server) runBinaryJSON(binName string, extraEnv []string, args ...string) (map[string]any, int, string, error) {
@@ -1303,7 +1391,11 @@ func (s *Server) execTanukiWithOpsec(req Request, includeOpsec bool) (Row, map[s
 			nil, 1, fmt.Sprintf("[TANUKI:%s] %v", subcmd, buildErr)
 	}
 
-	data, exitCode, stderrStr, err := s.runJSONProcess(s.tanukiBin, nil, args...)
+	procTimeout := 15 * time.Second
+	if subcmd == "ldap" || subcmd == "nhi" || subcmd == "auth" || subcmd == "tgs" {
+		procTimeout = 30 * time.Second
+	}
+	data, exitCode, stderrStr, err := s.runJSONProcessWithTimeout(procTimeout, s.tanukiBin, nil, args...)
 	if err != nil {
 		return errRow("OP-06", "Tanuki", subcmd, targetLabel, exitCode, err),
 			nil, exitCode, fmt.Sprintf("[TANUKI:%s] error: %v (%s)", subcmd, err, stderrStr)
@@ -1989,16 +2081,12 @@ func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentCo
 		resp.Rows = []Row{row}
 		resp.Logs = []string{ts + " " + logLine}
 		if s.storage != nil {
-			_ = s.storage.RecordAuditEvent(context.Background(), req.HostID, "OP-06", severityForRow(row.Status, rc), rc, row.Status, AuditDetail{
-				Action:  "tanuki_exec:" + req.Subcommand,
-				Summary: row.Detail,
-				Body:    logLine,
-			})
+			_ = s.storage.RecordTanukiExecAudit(context.Background(), req.HostID, row, logLine)
 			_ = s.storage.RecordOperatorCommand(context.Background(), req.HostID, OperatorCommandPayload{
 				OperatorName: peer.CommonName,
 				Action:       "tanuki_exec",
-				Command:      req.Subcommand + " " + req.TargetArg,
-				Args:         req.Args,
+				Command:      redactCommandString(req.Subcommand + " " + req.TargetArg),
+				Args:         redactSensitiveArgs(req.Args),
 			}, rc, row.Status)
 		}
 
@@ -2280,9 +2368,24 @@ func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentCo
 			resp.Error = err.Error()
 			break
 		}
-		serial := strings.ToLower(strings.TrimSpace(req.SerialHex))
-		if serial == "" && targetFP == peer.CertFP {
-			serial = peer.SerialHex
+		rawSerial := strings.TrimSpace(req.SerialHex)
+		if rawSerial == "" && strings.EqualFold(targetFP, peer.CertFP) {
+			rawSerial = peer.SerialHex
+		}
+		if rawSerial == "" {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "USAGE_ERROR"
+			resp.Error = "serial_hex is required when issuing a session token for a secondary cert_fp"
+			break
+		}
+		_, serial, sErr := mtls.ParseSerial(rawSerial)
+		if sErr != nil {
+			resp.OK = false
+			resp.ExitCode = 1
+			resp.Status = "USAGE_ERROR"
+			resp.Error = fmt.Sprintf("invalid serial_hex: %v", sErr)
+			break
 		}
 		newSess := s.registerSession(newTok, targetFP, serial, defaultTokenTTL)
 		resp.OK = true
@@ -2290,10 +2393,11 @@ func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentCo
 		resp.Data = map[string]any{
 			"auth_token":       newTok,
 			"cert_fp":          targetFP,
+			"serial_hex":       serial,
 			"issued_at":        newSess.IssuedAt.Format(time.RFC3339),
 			"token_expires_at": newSess.ExpiresAt.Format(time.RFC3339),
 		}
-		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] session_issue cert_fp=%s", ts, targetFP[:12])}
+		resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] session_issue cert_fp=%s serial=%s", ts, targetFP[:12], serial)}
 
 	case "token_rotate":
 		newTok, err := generateRandomToken()
@@ -2304,11 +2408,21 @@ func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentCo
 			resp.Error = err.Error()
 			break
 		}
+		updateTokenFile := s.tokenFile != "" && (peer.CertFP == "" || peer.CertFP == s.bootstrapCertFP)
+		if updateTokenFile {
+			if wErr := writeFileNoFollow(s.tokenFile, []byte(newTok+"\n"), 0o600); wErr != nil {
+				resp.OK = false
+				resp.ExitCode = 1
+				resp.Status = "ERROR"
+				resp.Error = fmt.Sprintf("persist rotated token: %v", wErr)
+				resp.Logs = []string{fmt.Sprintf("%s [TEAMSERVER] token_rotate failed: %v", ts, wErr)}
+				break
+			}
+		}
 		newSess := s.registerSession(newTok, peer.CertFP, peer.SerialHex, defaultTokenTTL)
 		// Shrink previous matching token(s) for this certFP to 30s grace overlap.
 		graceDeadline := time.Now().UTC().Add(tokenRotateGrace)
 		newHash := newSess.TokenHash
-		updateTokenFile := s.tokenFile != "" && (peer.CertFP == "" || peer.CertFP == s.bootstrapCertFP)
 		s.sessMu.Lock()
 		for _, existing := range s.sessions {
 			if existing != nil && existing.TokenHash != newHash && existing.CertFP == newSess.CertFP {
@@ -2321,9 +2435,6 @@ func (s *Server) handleRequestWithPeer(req Request, peer peerConnInfo, currentCo
 			s.authToken = newTok
 		}
 		s.sessMu.Unlock()
-		if updateTokenFile {
-			_ = writeFileNoFollow(s.tokenFile, []byte(newTok+"\n"), 0o600)
-		}
 		resp.OK = true
 		resp.Status = "ROTATED"
 		resp.Data = map[string]any{

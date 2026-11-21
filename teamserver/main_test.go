@@ -657,3 +657,93 @@ func TestChronoaAndFullSyncRealHostBehavior(t *testing.T) {
 		}
 	}
 }
+
+func TestHardeningPurgeEtcRedactSessionSerialAndTokenRotate(t *testing.T) {
+	// 1. validatePurgeTarget blocks /etc/ prefix
+	for _, p := range []string{"/etc/krb5.keytab", "/etc/ssh/ssh_host_rsa_key", "/etc/custom.conf"} {
+		if err := validatePurgeTarget(p); err == nil {
+			t.Fatalf("expected validatePurgeTarget(%q) to fail", p)
+		}
+	}
+
+	// 2. redactSensitiveArgs and redactCommandString redact secret values
+	redArgs := redactSensitiveArgs([]string{"ldap", "-u", "svc", "-p", "Secret123!", "--password=AnotherSecret", "--token", "jwt.tok"})
+	joined := strings.Join(redArgs, " ")
+	if strings.Contains(joined, "Secret123!") || strings.Contains(joined, "AnotherSecret") || strings.Contains(joined, "jwt.tok") {
+		t.Fatalf("secret leaked in redacted args: %q", joined)
+	}
+	if !strings.Contains(joined, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] marker in %q", joined)
+	}
+	redCmd := redactCommandString("nhi exchange --subject-token topsecret --endpoint https://sts.local")
+	if strings.Contains(redCmd, "topsecret") || !strings.Contains(redCmd, "[REDACTED]") {
+		t.Fatalf("redactCommandString failed: %q", redCmd)
+	}
+
+	// 3. session_issue requires non-empty valid hex serial_hex for secondary cert_fp
+	fp1 := strings.Repeat("a", 64)
+	fp2 := strings.Repeat("b", 64)
+	srv := &Server{
+		requireTLSBinding: true,
+		bootstrapCertFP:   fp1,
+		bootstrapSerial:   "01",
+	}
+	tok1 := "tok-bootstrap-123"
+	srv.registerSession(tok1, fp1, "01", defaultTokenTTL)
+
+	peer1 := peerConnInfo{CertFP: fp1, SerialHex: "01", CommonName: "client"}
+	rMissing, _ := srv.handleRequestWithPeer(Request{
+		AuthToken: tok1,
+		Action:    "session_issue",
+		CertFP:    fp2,
+	}, peer1, nil)
+	if rMissing.OK || rMissing.Status != "USAGE_ERROR" {
+		t.Fatalf("expected secondary session_issue without serial_hex to fail USAGE_ERROR, got %+v", rMissing)
+	}
+
+	rBadSerial, _ := srv.handleRequestWithPeer(Request{
+		AuthToken: tok1,
+		Action:    "session_issue",
+		CertFP:    fp2,
+		SerialHex: "not-hex!",
+	}, peer1, nil)
+	if rBadSerial.OK || rBadSerial.Status != "USAGE_ERROR" {
+		t.Fatalf("expected invalid serial_hex to fail USAGE_ERROR, got %+v", rBadSerial)
+	}
+
+	rIssued, _ := srv.handleRequestWithPeer(Request{
+		AuthToken: tok1,
+		Action:    "session_issue",
+		CertFP:    fp2,
+		SerialHex: "00:2a",
+	}, peer1, nil)
+	if !rIssued.OK || rIssued.Status != "ISSUED" {
+		t.Fatalf("expected valid secondary session_issue to succeed, got %+v", rIssued)
+	}
+	if gotSerial, _ := rIssued.Data["serial_hex"].(string); gotSerial != "0000000000000000000000000000002a" {
+		t.Fatalf("expected canonical serial_hex '0000000000000000000000000000002a', got %q", gotSerial)
+	}
+
+	// 4. token_rotate fails closed if tokenFile is a symlink
+	if runtime.GOOS != "windows" {
+		td := t.TempDir()
+		victim := filepath.Join(td, "victim.txt")
+		_ = os.WriteFile(victim, []byte("keep-me"), 0o600)
+		symTok := filepath.Join(td, "teamserver.token")
+		if err := os.Symlink(victim, symTok); err == nil {
+			srv.tokenFile = symTok
+			srv.authToken = tok1
+			rRot, _ := srv.handleRequestWithPeer(Request{
+				AuthToken: tok1,
+				Action:    "token_rotate",
+			}, peer1, nil)
+			if rRot.OK || rRot.Status != "ERROR" {
+				t.Fatalf("expected token_rotate to fail closed on symlink tokenFile, got %+v", rRot)
+			}
+			gotVictim, _ := os.ReadFile(victim)
+			if string(gotVictim) != "keep-me" {
+				t.Fatalf("symlink target was modified: %q", string(gotVictim))
+			}
+		}
+	}
+}
