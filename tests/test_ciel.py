@@ -100,10 +100,10 @@ def load_ui_font(size=14):
 def frame_desktop_window(shot_img, title_text, icon_path):
     bar_h = 30
     w, h = shot_img.size
-    framed = Image.new("RGBA", (w + 2, h + bar_h + 2), (24, 25, 34, 255))
+    framed = Image.new("RGBA", (w + 2, h + bar_h + 2), (17, 19, 24, 255))
     draw = ImageDraw.Draw(framed)
-    draw.rectangle([1, 1, w, bar_h], fill=(32, 34, 44, 255))
-    draw.line([1, bar_h, w, bar_h], fill=(68, 71, 90, 255), width=1)
+    draw.rectangle([1, 1, w, bar_h], fill=(24, 27, 34, 255))
+    draw.line([1, bar_h, w, bar_h], fill=(42, 47, 58, 255), width=1)
 
     if icon_path.exists():
         ico = Image.open(icon_path).convert("RGBA").resize((20, 20), Image.Resampling.LANCZOS)
@@ -113,14 +113,14 @@ def frame_desktop_window(shot_img, title_text, icon_path):
     bbox = draw.textbbox((0, 0), title_text, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
-    draw.text(((w - tw) // 2, (bar_h - th) // 2 - 1), title_text, fill=(248, 248, 242, 255), font=font)
+    draw.text(((w - tw) // 2, (bar_h - th) // 2 - 1), title_text, fill=(243, 244, 246, 255), font=font)
 
-    dots = [(w - 58, (255, 95, 86, 255)), (w - 38, (255, 189, 46, 255)), (w - 18, (39, 201, 63, 255))]
+    dots = [(w - 58, (239, 68, 68, 255)), (w - 38, (245, 158, 11, 255)), (w - 18, (16, 185, 129, 255))]
     for cx, col in dots:
         draw.ellipse([cx - 5, 10, cx + 5, 20], fill=col)
 
     framed.paste(shot_img.convert("RGBA"), (1, bar_h + 1))
-    draw.rectangle([0, 0, w + 1, h + bar_h + 1], outline=(72, 75, 96, 255), width=1)
+    draw.rectangle([0, 0, w + 1, h + bar_h + 1], outline=(42, 47, 58, 255), width=1)
     return framed
 
 
@@ -134,11 +134,11 @@ def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_
     out_graph = out_dir / "FullSessionGraph.png"
     framed_graph.convert("RGB").save(out_graph, format="PNG")
 
-    im_table = frame_desktop_window(Image.open(table_shot), "Ciel | Session Control", icon_path)
+    im_table = frame_desktop_window(Image.open(table_shot), "Ciel | Operations & Inspector", icon_path)
     out_sessions = out_dir / "SessionsOverview.png"
     im_table.convert("RGB").save(out_sessions, format="PNG")
 
-    im_alt = frame_desktop_window(Image.open(alt_shot), "Ciel | Telemetry & Listeners", icon_path)
+    im_alt = frame_desktop_window(Image.open(alt_shot), "Ciel | 4-Cycle Module Catalog", icon_path)
     out_listeners = out_dir / "ListenersAndTelemetry.png"
     im_alt.convert("RGB").save(out_listeners, format="PNG")
 
@@ -152,7 +152,7 @@ def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_
 
     canvas_w = win_w + 260
     canvas_h = win_h + 90
-    canvas = Image.new("RGBA", (canvas_w, canvas_h), (24, 26, 36, 255))
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (17, 19, 24, 255))
     canvas.paste(back_res, (16, 16), back_res)
 
     fx, fy = 240, 68
@@ -695,9 +695,13 @@ def run_pg16_e2e_test():
                 hist = rpc_call("127.0.0.1", ts_port, {"auth_token": auth_token, "action": "history_list", "limit": 10}, pki_dir=pki_dir)
                 assert hist["ok"] is True and hist["data"]["snapshot_count"] >= 5 and hist["data"]["event_count"] >= 5, hist
 
-                bkp_path = str(tmp / "fleet.shunas1")
-                bkp = rpc_call("127.0.0.1", ts_port, {"auth_token": auth_token, "action": "backup_export", "out_path": bkp_path}, pki_dir=pki_dir)
-                assert bkp["ok"] is True and bkp["data"]["format"] == "SHUNAS1" and Path(bkp_path).read_bytes()[:7] == b"SHUNAS1", bkp
+                bad_bkp = rpc_call("127.0.0.1", ts_port, {"auth_token": auth_token, "action": "backup_export", "out_path": str(tmp / "escape.shunas1")}, pki_dir=pki_dir)
+                assert bad_bkp["ok"] is False and bad_bkp["exit_code"] == 1 and bad_bkp["status"] == "USAGE_ERROR", bad_bkp
+
+                bkp = rpc_call("127.0.0.1", ts_port, {"auth_token": auth_token, "action": "backup_export", "out_path": "fleet.shunas1"}, pki_dir=pki_dir)
+                assert bkp["ok"] is True and bkp["data"]["format"] == "SHUNAS1", bkp
+                bkp_path = Path(bkp["data"]["out_path"])
+                assert bkp_path.exists() and bkp_path.read_bytes()[:7] == b"SHUNAS1", bkp
 
                 c_env = os.environ.copy()
                 c_env["QT_QPA_PLATFORM"] = "offscreen"

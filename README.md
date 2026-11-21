@@ -36,7 +36,7 @@ Ciel pairs a compiled C++20 Qt6 desktop client with a Go teamserver over post-qu
 - Post-quantum hybrid mTLS 1.3 (X25519MLKEM768) between the Qt6 client and Go teamserver with live CRL/DB certificate revocation and cert-bound 256-bit auth tokens
 - Encrypted PostgreSQL 16 fleet persistence over verify-full TLS with row-bound SHUNA1 AEAD, HMAC blind-indexed host IDs, persisted vault lockout protection, online key rotation, and SHUNAS1 streaming backups
 - Ephemeral standalone mode when no PostgreSQL DSN is configured, or fail-closed startup when a configured database is unreachable
-- Native C++20 Qt6 desktop interface with an interactive Session Graph, 10-column Sessions matrix, diff-only Event Viewer, Raw JSON inspector, and Operative Console
+- Native C++20 Qt6 desktop interface with a 4-zone InfinityCurve workspace (Left Mode Rail, 6-column Operatives matrix & interactive Session Graph, closable Right Inspector Drawer with dot-leader Summary & Raw JSON, and Bottom Dock with Operative Console & diff-only Event Viewer)
 
 ## Documentation
 

@@ -18,8 +18,9 @@ Run commands directly inside Operative Console (Tab autocomplete enabled), or tr
 - **history [operative_id|host_id] [limit]**: Query and decrypt audit_events and telemetry_snapshots from PostgreSQL while verifying row-bound AAD.
 - **unlock [passphrase]**: Unlock the Shuna vault via rate-limited Argon2id (vault_unlock). Prompts securely if passphrase is omitted.
 - **rotate [new_passphrase]**: Trigger dual-key online DEK rotation and batched background re-encryption (LIMIT 1000 FOR UPDATE SKIP LOCKED) across all encrypted tables.
-- **backup [out_path]**: Stream pg_dump through shuna.SealStream (SHUNAS1 chunked XChaCha20-Poly1305) to a 0600 backup archive.
+- **backup [out_path]**: Stream pg_dump through shuna.SealStream (SHUNAS1 chunked XChaCha20-Poly1305) to a 0600 backup archive confined inside {work_dir}/backups.
 - **token_rotate**: Rotate the mTLS-cert-bound 256-bit session auth_token (30s grace overlap on previous token).
+- **session_issue [client_cert_sha256_fp] [serial_hex]**: Issue an mTLS-cert-bound 256-bit session auth_token for a secondary operator certificate (restricted to the bootstrap operator certificate).
 - **cert_revoke [serial_hex] [reason]**: Revoke an mTLS client certificate in ca.crl + revoked_certs, invalidate its session tokens, and immediately terminate active sockets matching that serial.
 
 ## Tempest Runtime Commands (OP-01 through OP-05)

@@ -63,6 +63,7 @@ test-go:
 
 test: all test-go
 	python3 tests/test_ciel.py
+	python3 tests/test_ecosystem_e2e.py
 
 clean:
 	rm -rf bin build

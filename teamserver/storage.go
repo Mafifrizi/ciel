@@ -133,7 +133,7 @@ type pgLockoutStore struct {
 }
 
 func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var failed int
@@ -183,7 +183,7 @@ func (s *pgLockoutStore) Load() (vault.LockoutState, error) {
 }
 
 func (s *pgLockoutStore) Save(st vault.LockoutState) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var lockedPtr, lastPtr *time.Time
@@ -1206,22 +1206,26 @@ func (st *Storage) SaveProfile(ctx context.Context, hostID string, meta HostMeta
 	if st.VaultLocked() || st.vault == nil {
 		return vault.ErrVaultLocked
 	}
+	kv := st.vault.ActiveKeyVersion()
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal host meta for profile: %w", err)
+	}
+	hostAAD := []byte(fmt.Sprintf("hosts|%s|1|%d", hostID, kv))
+	hostMetaEnc, err := st.vault.Encrypt(hostAAD, metaBytes)
+	kdf.WipeBytes(metaBytes)
+	if err != nil {
+		return fmt.Errorf("encrypt host meta for profile: %w", err)
+	}
 	// Ensure host row exists first (FK constraint).
 	if _, err := st.pool.Exec(ctx, `
 		INSERT INTO hosts (host_id, status, host_meta_enc, key_version, first_seen_at, last_seen_at)
 		SELECT $1, 'ONLINE', $2, $3, NOW(), NOW()
 		WHERE NOT EXISTS (SELECT 1 FROM hosts WHERE host_id = $1)
-	`, hostID, func() []byte {
-		b, _ := json.Marshal(meta)
-		aad := []byte(fmt.Sprintf("hosts|%s|1|%d", hostID, st.vault.ActiveKeyVersion()))
-		enc, _ := st.vault.Encrypt(aad, b)
-		kdf.WipeBytes(b)
-		return enc
-	}(), int32(st.vault.ActiveKeyVersion())); err != nil {
+	`, hostID, hostMetaEnc, int32(kv)); err != nil {
 		return fmt.Errorf("ensure host for profile: %w", err)
 	}
 
-	kv := st.vault.ActiveKeyVersion()
 	aad := []byte(fmt.Sprintf("target_profiles|%s|1|%d", hostID, kv))
 	encOpt := func(s string) ([]byte, error) {
 		if strings.TrimSpace(s) == "" {
@@ -1358,7 +1362,10 @@ func (st *Storage) StartRotation(ctx context.Context, newPass []byte) (uint32, u
 
 	if st.pool == nil {
 		// Standalone mode: retire old key immediately after preparation.
-		_ = st.vault.RetireKey(oldVer)
+		if err := st.vault.RetireKey(oldVer); err != nil {
+			cleanupFlag()
+			return oldVer, newVer, err
+		}
 		cleanupFlag()
 		return oldVer, newVer, nil
 	}
@@ -1423,14 +1430,29 @@ func (st *Storage) runBatchedRotation(oldVer, newVer uint32) {
 	}
 	if rem == 0 {
 		for v := uint32(1); v < newVer; v++ {
-			_ = st.vault.RetireKey(v)
+			if err := st.vault.RetireKey(v); err != nil && !errors.Is(err, vault.ErrKeyNotFound) {
+				st.rotMu.Lock()
+				st.lastRotErr = err.Error()
+				st.rotMu.Unlock()
+				return
+			}
 		}
-		_, _ = st.pool.Exec(ctx, `
+		if _, err := st.pool.Exec(ctx, `
 			UPDATE crypto_keys
 			SET active = FALSE, decrypt_only = FALSE, retired_at = COALESCE(retired_at, NOW())
 			WHERE key_version < $1
-		`, int32(newVer))
-		_ = st.SyncCryptoKeys(ctx)
+		`, int32(newVer)); err != nil {
+			st.rotMu.Lock()
+			st.lastRotErr = err.Error()
+			st.rotMu.Unlock()
+			return
+		}
+		if err := st.SyncCryptoKeys(ctx); err != nil {
+			st.rotMu.Lock()
+			st.lastRotErr = err.Error()
+			st.rotMu.Unlock()
+			return
+		}
 	}
 	_ = oldVer
 }
@@ -1829,10 +1851,15 @@ func (st *Storage) ExportBackup(ctx context.Context, outPath string) (int64, err
 		return 0, vault.ErrVaultLocked
 	}
 	if err := validatePurgeTarget(outPath); err != nil {
-		return 0, err
+		return 0, contract.NewError(contract.ExitUsage, "USAGE_ERROR", err.Error(), err)
+	}
+	for _, seg := range strings.FieldsFunc(outPath, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return 0, contract.NewError(contract.ExitUsage, "USAGE_ERROR", "backup destination must not contain '..' traversal", nil)
+		}
 	}
 	if info, err := os.Lstat(outPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return 0, fmt.Errorf("refusing symlink backup destination: %s", outPath)
+		return 0, contract.NewError(contract.ExitPolicyStop, "POLICY_STOP", fmt.Sprintf("refusing symlink backup destination: %s", outPath), nil)
 	}
 
 	pgDumpBin, err := findPgDumpBin()
@@ -1860,6 +1887,11 @@ func (st *Storage) ExportBackup(ctx context.Context, outPath string) (int64, err
 		env = append(env, "PGSSLMODE=disable")
 	}
 
+	dir := filepath.Dir(outPath)
+	if err := validateSecureDir(dir); err != nil {
+		return 0, contract.NewError(contract.ExitPolicyStop, "POLICY_STOP", err.Error(), err)
+	}
+
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, pgDumpBin, "--no-owner", "--no-acl")
@@ -1874,12 +1906,6 @@ func (st *Storage) ExportBackup(ctx context.Context, outPath string) (int64, err
 		return 0, fmt.Errorf("start pg_dump: %w", err)
 	}
 
-	dir := filepath.Dir(outPath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return 0, err
-	}
 	tmp, err := os.CreateTemp(dir, ".ciel-backup-*.shunas1")
 	if err != nil {
 		_ = cmd.Process.Kill()
@@ -1912,9 +1938,9 @@ func (st *Storage) ExportBackup(ctx context.Context, outPath string) (int64, err
 		_ = os.Remove(tmpName)
 		return 0, err
 	}
-	if err := os.Rename(tmpName, outPath); err != nil {
-		_ = os.Remove(tmpName)
-		return 0, err
+	defer os.Remove(tmpName)
+	if err := installTempFileNoFollow(tmpName, outPath, 0o600); err != nil {
+		return 0, contract.NewError(contract.ExitPolicyStop, "POLICY_STOP", err.Error(), err)
 	}
 	return cw.n, nil
 }

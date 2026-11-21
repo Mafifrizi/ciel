@@ -44,3 +44,21 @@ func writeFileNoFollow(path string, data []byte, perm os.FileMode) error {
 	}
 	return os.WriteFile(path, data, perm)
 }
+
+func installTempFileNoFollow(tmpPath, dstPath string, perm os.FileMode) error {
+	if err := validateSecureDir(filepath.Dir(dstPath)); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(dstPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink: %s", dstPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dstPath, data, perm)
+}

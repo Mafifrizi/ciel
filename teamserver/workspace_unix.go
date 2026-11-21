@@ -69,3 +69,43 @@ func writeFileNoFollow(path string, data []byte, perm os.FileMode) error {
 	}
 	return closeErr
 }
+
+func installTempFileNoFollow(tmpPath, dstPath string, perm os.FileMode) error {
+	if err := validateSecureDir(filepath.Dir(dstPath)); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(dstPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink: %s", dstPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	src, err := os.Open(tmpPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	fd, err := syscall.Open(dstPath, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC|syscall.O_NOFOLLOW, uint32(perm))
+	if err != nil {
+		return err
+	}
+	dst := os.NewFile(uintptr(fd), dstPath)
+	if dst == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("failed wrapping file descriptor for %s", dstPath)
+	}
+	_, copyErr := dst.ReadFrom(src)
+	syncErr := dst.Sync()
+	closeErr := dst.Close()
+	if copyErr != nil {
+		_ = os.Remove(dstPath)
+		return copyErr
+	}
+	if syncErr != nil {
+		_ = os.Remove(dstPath)
+		return syncErr
+	}
+	return closeErr
+}

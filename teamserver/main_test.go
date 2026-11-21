@@ -363,12 +363,39 @@ func TestBuildTanukiArgsRealHostAndExplicitTargets(t *testing.T) {
 	}
 
 	tgsArgs, _, err := srv.buildTanukiArgs("tgs", Request{
-		Subcommand: "tgs",
-		CcachePath: customCC,
-		Args:       []string{"--spn", "HTTP/dc01@CORP.LOCAL", "--kdc", "10.0.0.1"},
+		Subcommand:   "tgs",
+		CcachePath:   customCC,
+		Krb5ConfPath: customConf,
+		Args:         []string{"--spn", "HTTP/dc01@CORP.LOCAL", "--kdc", "10.0.0.1"},
 	}, true)
-	if err != nil || !slices.Contains(tgsArgs, "--ccache") || !slices.Contains(tgsArgs, customCC) {
-		t.Fatalf("tgs with Args did not forward configured ccache: args=%v err=%v", tgsArgs, err)
+	if err != nil || !slices.Contains(tgsArgs, "--ccache") || !slices.Contains(tgsArgs, customCC) || !slices.Contains(tgsArgs, "--krb5-conf") || !slices.Contains(tgsArgs, customConf) {
+		t.Fatalf("tgs with Args did not forward configured ccache/krb5-conf: args=%v err=%v", tgsArgs, err)
+	}
+
+	authArgs, _, err := srv.buildTanukiArgs("auth", Request{
+		Subcommand:   "auth",
+		KeytabPath:   customKT,
+		Krb5ConfPath: customConf,
+		TargetArg:    "--principal svc@CORP.LOCAL --kdc 10.0.0.1",
+	}, true)
+	if err != nil || !slices.Contains(authArgs, "--keytab") || !slices.Contains(authArgs, customKT) || !slices.Contains(authArgs, "--krb5-conf") || !slices.Contains(authArgs, customConf) {
+		t.Fatalf("auth with TargetArg did not forward configured keytab/krb5-conf: args=%v err=%v", authArgs, err)
+	}
+
+	// Verify backup_export path confinement under <workDir>/backups
+	bkpDefault, err := srv.resolveBackupOutPath("")
+	if err != nil || filepath.Dir(bkpDefault) != filepath.Join(workDir, "backups") {
+		t.Fatalf("default backup path not confined to workDir/backups: path=%q err=%v", bkpDefault, err)
+	}
+	bkpRel, err := srv.resolveBackupOutPath("fleet.shunas1")
+	if err != nil || bkpRel != filepath.Join(workDir, "backups", "fleet.shunas1") {
+		t.Fatalf("relative backup path mismatch: path=%q err=%v", bkpRel, err)
+	}
+	if _, err := srv.resolveBackupOutPath("../../tmp/escape.shunas1"); err == nil {
+		t.Fatal("expected traversal backup out_path to be rejected")
+	}
+	if _, err := srv.resolveBackupOutPath(filepath.Join(t.TempDir(), "outside.shunas1")); err == nil {
+		t.Fatal("expected outside absolute backup out_path to be rejected")
 	}
 
 	// Quoted target_arg preserves spaces inside quotes

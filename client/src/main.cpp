@@ -1,10 +1,14 @@
 #include <QAction>
 #include <QApplication>
+#include <QButtonGroup>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCompleter>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDialog>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -13,6 +17,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFormLayout>
 #include <QGraphicsPathItem>
 #include <QGraphicsPolygonItem>
 #include <QGraphicsRectItem>
@@ -27,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -53,6 +59,7 @@
 #include <QSslError>
 #include <QSslKey>
 #include <QSslSocket>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleOptionGraphicsItem>
@@ -81,214 +88,315 @@ namespace {
 
 QString applyCielStylesheet() {
     return QStringLiteral(R"(
-        QMainWindow, QWidget, QDialog, QMessageBox, QInputDialog {
-            background-color: #313342;
-            color: #f8f8f2;
+        QMainWindow#CielMainWindow, QDialog#ModuleModal, QDialog, QMessageBox, QInputDialog, QFileDialog {
+            background-color: #111318;
+            color: #F3F4F6;
         }
 
-        QWidget#ListenersPanel, QWidget#ConsolePanel {
-            background-color: #282a36;
-            color: #f8f8f2;
+        QWidget#RootCanvas, QStackedWidget#WorkspaceStack {
+            background-color: #111318;
+            color: #F3F4F6;
+        }
+
+        QWidget#LeftRail {
+            background-color: #181B22;
+            border-right: 1px solid #2B303C;
+        }
+
+        QWidget#TopKpiBar {
+            background-color: #181B22;
+            border-bottom: 1px solid #2B303C;
+        }
+
+        QWidget#VaultBanner {
+            background-color: #2A161B;
+            border: 1px solid #EF4444;
+            border-radius: 3px;
+        }
+
+        QWidget#InspectorDrawer {
+            background-color: #181B22;
+            border-left: 1px solid #2B303C;
+        }
+
+        QWidget#InspectorHeader {
+            background-color: #20242E;
+            border-bottom: 1px solid #2B303C;
+        }
+
+        QWidget#ConsolePanel, QWidget#ModulesPanel, QWidget#FleetPanel, QWidget#VaultPanel, QWidget#TargetsPanel {
+            background-color: #181B22;
+            color: #F3F4F6;
+        }
+
+        QWidget#ModuleCard, QWidget#VaultCard, QWidget#PkiCard {
+            background-color: #20242E;
+            border: 1px solid #2B303C;
+            border-radius: 4px;
+        }
+
+        QWidget#StatusBarStrip {
+            background-color: #181B22;
+            border-top: 1px solid #2B303C;
         }
 
         QLabel {
             background-color: transparent;
-            color: #f8f8f2;
+            color: #F3F4F6;
+        }
+
+        QLabel#MutedLabel, QLabel#StatusStripItem {
+            color: #8B949E;
+        }
+
+        QLabel#KpiBadge {
+            background-color: #20242E;
+            color: #F3F4F6;
+            border: 1px solid #2B303C;
+            border-radius: 3px;
+            padding: 2px 8px;
+            font-weight: bold;
+        }
+
+        QLabel#VaultBannerText {
+            color: #FCA5A5;
+            font-weight: bold;
         }
 
         QSplitter::handle {
-            background-color: #313342;
+            background-color: #2B303C;
         }
 
         QMenuBar {
-            background-color: #282a36;
-            color: #f8f8f2;
-            border: none;
+            background-color: #181B22;
+            color: #F3F4F6;
+            border-bottom: 1px solid #2B303C;
         }
         QMenuBar::item {
-            background-color: #282a36;
-            color: #f8f8f2;
-            padding: 3px 8px;
+            background-color: transparent;
+            color: #F3F4F6;
+            padding: 4px 10px;
         }
         QMenuBar::item:selected {
-            background-color: #6272a4;
+            background-color: #20242E;
+            color: #60A5FA;
         }
         QMenuBar::item:pressed {
-            background-color: #44475a;
+            background-color: #2B303C;
         }
 
         QMenu {
-            background-color: #282a36;
-            color: #f8f8f2;
-            border: 1px solid #44475a;
+            background-color: #181B22;
+            color: #F3F4F6;
+            border: 1px solid #2B303C;
         }
         QMenu::item {
-            padding: 4px 20px 4px 12px;
+            padding: 5px 22px 5px 12px;
         }
         QMenu::item:selected {
-            background-color: #44475a;
+            background-color: #20242E;
+            color: #60A5FA;
         }
         QMenu::separator {
             height: 1px;
-            background-color: #44475a;
+            background-color: #2B303C;
             margin: 3px 6px;
         }
 
         QTabWidget::pane {
-            background-color: #282a36;
-            border: 1px solid #44475a;
+            background-color: #181B22;
+            border: 1px solid #2B303C;
         }
         QTabBar::tab {
-            background-color: #282a36;
-            color: #f8f8f2;
-            border: 1px solid #44475a;
+            background-color: #181B22;
+            color: #9CA3AF;
+            border: 1px solid #2B303C;
             border-bottom: none;
-            padding: 4px 14px;
+            padding: 5px 14px;
             margin-right: 2px;
         }
         QTabBar::tab:selected {
-            background-color: #44475a;
-            color: #f8f8f2;
-            border: 1px solid #ff79c6;
-            border-bottom: none;
+            background-color: #20242E;
+            color: #F3F4F6;
+            border-top: 2px solid #3B82F6;
         }
 
         QTableWidget {
-            background-color: #282a36;
-            color: #f8f8f2;
-            border: none;
-            gridline-color: #282a36;
-            selection-background-color: #6272a4;
-            selection-color: #f8f8f2;
+            background-color: #181B22;
+            color: #F3F4F6;
+            border: 1px solid #2B303C;
+            gridline-color: #20242E;
+            selection-background-color: #1E3A8A;
+            selection-color: #F3F4F6;
+        }
+        QTableWidget:focus {
+            border: 1px solid #3B82F6;
         }
         QTableWidget::item:selected {
-            background-color: #6272a4;
-            color: #f8f8f2;
+            background-color: #1E3A8A;
+            color: #F3F4F6;
         }
         QHeaderView::section {
-            background-color: #44475a;
-            color: #f8f8f2;
+            background-color: #20242E;
+            color: #F3F4F6;
             border: none;
-            padding: 4px 6px;
+            border-bottom: 1px solid #2B303C;
+            border-right: 1px solid #2B303C;
+            padding: 4px 8px;
             font-weight: bold;
         }
 
         QTextEdit, QPlainTextEdit, QGraphicsView {
-            background-color: #282a36;
-            color: #f8f8f2;
+            background-color: #181B22;
+            color: #F3F4F6;
             border: none;
         }
+        QTextEdit:focus, QPlainTextEdit:focus {
+            border: 1px solid #3B82F6;
+        }
 
-        QLineEdit {
-            background-color: #1e1f29;
-            color: #f8f8f2;
-            border: 1px solid #44475a;
+        QLineEdit, QComboBox {
+            background-color: #111318;
+            color: #F3F4F6;
+            border: 1px solid #2B303C;
             border-radius: 3px;
             padding: 3px 6px;
         }
-        QLineEdit:focus {
-            border: 1px solid #bd93f9;
+        QLineEdit:focus, QComboBox:focus {
+            border: 1px solid #3B82F6;
+        }
+
+        QCheckBox {
+            color: #F3F4F6;
+            spacing: 6px;
         }
 
         QLineEdit#OperativeInput {
-            background-color: #282a36;
-            color: #f8f8f2;
+            background-color: #181B22;
+            color: #F3F4F6;
             border: none;
             border-radius: 0px;
             padding: 3px 4px;
         }
 
         QLabel#SessionBanner {
-            background-color: #282a36;
-            color: #f8f8f2;
+            background-color: #20242E;
+            color: #9CA3AF;
+            border-top: 1px solid #2B303C;
+            border-bottom: 1px solid #2B303C;
             padding: 2px 6px;
         }
 
         QLabel#PromptArrow {
-            background-color: #282a36;
-            color: #8be9fd;
+            background-color: #181B22;
+            color: #60A5FA;
             padding: 2px 4px 2px 6px;
             font-weight: bold;
         }
 
         QLabel#SectionLabel {
-            color: #8be9fd;
+            color: #60A5FA;
             font-weight: bold;
             padding-top: 2px;
         }
 
-        QPushButton {
-            background-color: #bd93f9;
-            color: #1e1f29;
-            border: 1px solid #bd93f9;
+        QPushButton, QPushButton#PrimaryBtn {
+            background-color: #3B82F6;
+            color: #F3F4F6;
+            border: 1px solid #3B82F6;
             border-radius: 3px;
             padding: 4px 10px;
             font-weight: bold;
             min-height: 22px;
         }
-        QPushButton:hover {
-            background-color: #caa9fa;
-            border-color: #caa9fa;
-            color: #1e1f29;
+        QPushButton:hover, QPushButton#PrimaryBtn:hover {
+            background-color: #2563EB;
+            border-color: #60A5FA;
+            color: #FFFFFF;
         }
-        QPushButton:pressed {
-            background-color: #6272a4;
-            color: #f8f8f2;
-            border-color: #f8f8f2;
+        QPushButton:pressed, QPushButton#PrimaryBtn:pressed {
+            background-color: #1D4ED8;
+            color: #FFFFFF;
+            border-color: #93C5FD;
+        }
+        QPushButton:focus {
+            border: 1px solid #93C5FD;
         }
         QPushButton:disabled {
-            background-color: #383a4a;
-            color: #6272a4;
-            border-color: #44475a;
+            background-color: #1E222D;
+            color: #8B949E;
+            border-color: #2B303C;
         }
 
         QPushButton#SecondaryBtn {
-            background-color: #44475a;
-            color: #f8f8f2;
-            border: 1px solid #6272a4;
+            background-color: #20242E;
+            color: #F3F4F6;
+            border: 1px solid #2B303C;
             padding: 3px 8px;
             font-weight: normal;
         }
         QPushButton#SecondaryBtn:hover {
-            background-color: #6272a4;
-            color: #f8f8f2;
+            background-color: #2B303C;
+            border-color: #3B82F6;
+            color: #FFFFFF;
         }
         QPushButton#SecondaryBtn:pressed {
-            background-color: #282a36;
-            color: #f8f8f2;
+            background-color: #181B22;
+            color: #F3F4F6;
         }
 
         QPushButton#DangerBtn {
-            background-color: #ff5555;
-            color: #1e1f29;
-            border: 1px solid #ff5555;
+            background-color: #DC2626;
+            color: #FFFFFF;
+            border: 1px solid #EF4444;
         }
         QPushButton#DangerBtn:hover {
-            background-color: #ff6e6e;
-            border-color: #ff6e6e;
-            color: #1e1f29;
+            background-color: #B91C1C;
+            border-color: #FCA5A5;
+            color: #FFFFFF;
         }
         QPushButton#DangerBtn:pressed {
-            background-color: #a23e3e;
-            color: #f8f8f2;
+            background-color: #991B1B;
+            color: #FFFFFF;
+        }
+
+        QPushButton#RailBtn {
+            background-color: transparent;
+            color: #8B949E;
+            border: none;
+            border-left: 3px solid transparent;
+            border-radius: 0px;
+            padding: 8px 2px;
+            font-size: 10px;
+            font-weight: bold;
+            min-height: 32px;
+        }
+        QPushButton#RailBtn:hover {
+            background-color: #20242E;
+            color: #F3F4F6;
+        }
+        QPushButton#RailBtn:checked {
+            background-color: #20242E;
+            color: #60A5FA;
+            border-left: 3px solid #3B82F6;
         }
 
         QScrollBar:vertical {
-            background: #282a36;
+            background: #181B22;
             width: 10px;
             margin: 0;
         }
         QScrollBar::handle:vertical {
-            background: #44475a;
+            background: #2B303C;
             min-height: 20px;
         }
         QScrollBar:horizontal {
-            background: #282a36;
+            background: #181B22;
             height: 10px;
             margin: 0;
         }
         QScrollBar::handle:horizontal {
-            background: #44475a;
+            background: #2B303C;
             min-width: 20px;
         }
         QScrollBar::add-line, QScrollBar::sub-line {
@@ -306,12 +414,12 @@ QIcon makeOperativeBadgeIcon(const QColor &accent, bool isHub = false) {
 
     if (isHub) {
         p.setPen(QPen(accent, 1.5));
-        p.setBrush(QColor("#363949"));
+        p.setBrush(QColor("#20242E"));
         p.drawRect(2, 3, 14, 12);
         p.drawLine(2, 7, 16, 7);
     } else {
         p.setPen(QPen(accent, 1.4));
-        p.setBrush(QColor("#1e2029"));
+        p.setBrush(QColor("#111318"));
         p.drawRect(2, 2, 14, 10);
         p.drawLine(6, 15, 12, 15);
         p.drawLine(9, 12, 9, 15);
@@ -323,27 +431,37 @@ QIcon makeOperativeBadgeIcon(const QColor &accent, bool isHub = false) {
     return QIcon(pm);
 }
 
-QColor draculaStatusColor(const QString &status) {
+QColor cielStatusColor(const QString &status) {
     if (status == "OK" || status == "HEALTHY" || status == "ISOLATED" ||
         status == "RENEWED" || status == "PURGED" || status == "SYNCED" ||
         status == "READY" || status == "ONLINE" || status == "VERIFIED" ||
         status == "SUCCESS" || status == "PASS" || status == "PARSED" ||
         status == "MATCHED" || status == "5_RUNGS" || status == "NONE_DISCOVERED" ||
         status == "CLEAN" || status == "DRY_RUN" || status == "LOW" ||
-        status == "EXTRACTED") {
-        return QColor("#50fa7b");
+        status == "EXTRACTED" || status == "UNLOCKED" || status == "ROTATED" ||
+        status == "ISSUED" || status == "EXPORTED" || status == "SAVED") {
+        return QColor("#10B981");
     }
     if (status == "REVOKED") {
-        return QColor("#9aa5ce");
+        return QColor("#9CA3AF");
     }
     if (status == "EXPIRING_SOON" || status == "SHARED_KEYRING" ||
         status == "ATTENTION" || status == "WARN" || status == "MEDIUM" ||
         status == "MODERATE" || status == "FINDINGS" || status == "HIGH" ||
         status == "MISSING" || status == "NO_CREDENTIALS" || status == "RESOURCE_MISSING" ||
-        status == "N_A" || status == "PENDING") {
-        return QColor("#f1fa8c");
+        status == "N_A" || status == "PENDING" || status == "ROTATING") {
+        return QColor("#F59E0B");
     }
-    return QColor("#ff5555");
+    return QColor("#EF4444");
+}
+
+inline QColor draculaStatusColor(const QString &status) {
+    return cielStatusColor(status);
+}
+
+QString formatDotLeader(const QString &key, const QString &val, int width = 22) {
+    const int dots = qMax(2, width - static_cast<int>(key.size()));
+    return key + QString(dots, QChar('.')) + ": " + (val.isEmpty() ? QStringLiteral("-") : val);
 }
 
 struct BoolScopeGuard {
@@ -421,6 +539,41 @@ QStringList splitCommandLineArgs(const QString &line) {
         out.append(cur);
     }
     return out;
+}
+
+QString redactConsoleCommand(const QString &raw) {
+    const QStringList tokens = splitCommandLineArgs(raw);
+    if (tokens.isEmpty()) {
+        return raw;
+    }
+    const QString cmd = tokens.first().toLower();
+    if ((cmd == "unlock" || cmd == "rotate") && tokens.size() >= 2) {
+        return tokens.first() + " ********";
+    }
+    QStringList out;
+    out.reserve(tokens.size());
+    bool redactNext = false;
+    for (int i = 0; i < tokens.size(); ++i) {
+        const QString &t = tokens.at(i);
+        if (redactNext) {
+            out.append("********");
+            redactNext = false;
+            continue;
+        }
+        const QString low = t.toLower();
+        if (low == "--password" || low == "-p" || low == "--passphrase" || low == "--new-passphrase") {
+            out.append(t);
+            redactNext = true;
+            continue;
+        }
+        if (low.startsWith("--password=") || low.startsWith("--passphrase=") || low.startsWith("--new-passphrase=")) {
+            const int eq = t.indexOf('=');
+            out.append(t.left(eq + 1) + "********");
+            continue;
+        }
+        out.append(t);
+    }
+    return out.join(' ');
 }
 
 QString generateSecureHexToken() {
@@ -533,7 +686,7 @@ public:
         painter->setRenderHint(QPainter::Antialiasing, true);
 
         if (m_kind == NodeKind::FirewallHub) {
-            paintFirewallIcon(painter);
+            paintHubIcon(painter);
         } else {
             paintMonitorIcon(painter);
         }
@@ -545,15 +698,15 @@ public:
         const qreal cardW = m_cardW;
 
         painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor(14, 15, 22, 110));
+        painter->setBrush(QColor(9, 10, 14, 140));
         painter->drawRoundedRect(QRectF(-cardW * 0.5 + 2.0, 43.0, cardW, 36.0), 5.0, 5.0);
 
-        painter->setPen(QPen(QColor(68, 71, 90, 125), 1.0));
-        painter->setBrush(QColor(26, 28, 38, 212));
+        painter->setPen(QPen(QColor("#2B303C"), 1.0));
+        painter->setBrush(QColor(24, 27, 34, 235));
         painter->drawRoundedRect(QRectF(-cardW * 0.5, 41.0, cardW, 36.0), 5.0, 5.0);
 
         painter->setFont(f1);
-        painter->setPen(QColor("#f8f8f2"));
+        painter->setPen(QColor("#F3F4F6"));
         painter->drawText(QRectF(-cardW * 0.5 + 4.0, 43.0, cardW - 8.0, 17.0), Qt::AlignCenter, m_line1);
 
         painter->setFont(f2);
@@ -569,19 +722,19 @@ public:
             const qreal startX = -totalW * 0.5;
             const qreal yBase = 60.0 + fm2.ascent() + 1.0;
 
-            painter->setPen(QColor("#f8f8f2"));
+            painter->setPen(QColor("#9CA3AF"));
             painter->drawText(QPointF(startX, yBase), prefix);
             painter->setPen(m_statusColor);
             painter->drawText(QPointF(startX + w1, yBase), statusPart);
-            painter->setPen(QColor("#f8f8f2"));
+            painter->setPen(QColor("#9CA3AF"));
             painter->drawText(QPointF(startX + w1 + w2, yBase), suffix);
         } else {
-            painter->setPen(m_kind == NodeKind::FirewallHub ? QColor("#8be9fd") : m_statusColor);
+            painter->setPen(m_kind == NodeKind::FirewallHub ? QColor("#60A5FA") : m_statusColor);
             painter->drawText(QRectF(-cardW * 0.5 + 4.0, 60.0, cardW - 8.0, 16.0), Qt::AlignCenter, m_line2);
         }
 
         if (option && (option->state & QStyle::State_Selected)) {
-            QPen selPen(QColor("#8be9fd"), 1.5, Qt::DotLine);
+            QPen selPen(QColor("#3B82F6"), 1.6, Qt::DashLine);
             painter->setPen(selPen);
             painter->setBrush(Qt::NoBrush);
             painter->drawRoundedRect(QRectF(-48.0, -44.0, 96.0, 86.0), 6.0, 6.0);
@@ -592,73 +745,54 @@ protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
 
 private:
-    void paintFirewallIcon(QPainter *p) const {
+    void paintHubIcon(QPainter *p) const {
         p->setPen(Qt::NoPen);
-        p->setBrush(QColor(12, 13, 20, 120));
-        p->drawRoundedRect(QRectF(-32.0, -4.0, 70.0, 46.0), 4.0, 4.0);
+        p->setBrush(QColor(9, 10, 15, 130));
+        p->drawRoundedRect(QRectF(-34.0, -34.0, 72.0, 72.0), 10.0, 10.0);
 
-        QPainterPath outerFlame;
-        outerFlame.moveTo(-18.0, -4.0);
-        outerFlame.cubicTo(-26.0, -18.0, -10.0, -30.0, -6.0, -42.0);
-        outerFlame.cubicTo(-2.0, -32.0, 3.0, -34.0, 7.0, -46.0);
-        outerFlame.cubicTo(14.0, -32.0, 27.0, -20.0, 18.0, -4.0);
-        outerFlame.closeSubpath();
-        p->setPen(QPen(QColor("#282a36"), 1.2));
-        p->setBrush(QColor("#ffb86c"));
-        p->drawPath(outerFlame);
+        QLinearGradient bgGrad(0.0, -36.0, 0.0, 34.0);
+        bgGrad.setColorAt(0.0, QColor("#20242E"));
+        bgGrad.setColorAt(1.0, QColor("#181B22"));
+        p->setPen(QPen(m_statusColor, 1.8));
+        p->setBrush(bgGrad);
+        p->drawRoundedRect(QRectF(-35.0, -35.0, 70.0, 70.0), 9.0, 9.0);
 
-        QPainterPath innerFlame;
-        innerFlame.moveTo(-10.0, -4.0);
-        innerFlame.cubicTo(-13.0, -16.0, -4.0, -23.0, 0.0, -33.0);
-        innerFlame.cubicTo(6.0, -22.0, 14.0, -15.0, 10.0, -4.0);
-        innerFlame.closeSubpath();
+        // Post-quantum mTLS shield emblem inside server core hub
+        QPainterPath shield;
+        shield.moveTo(0.0, -24.0);
+        shield.lineTo(18.0, -17.0);
+        shield.lineTo(16.0, 3.0);
+        shield.quadTo(0.0, 21.0, 0.0, 21.0);
+        shield.quadTo(0.0, 21.0, -16.0, 3.0);
+        shield.lineTo(-18.0, -17.0);
+        shield.closeSubpath();
+
+        QLinearGradient shGrad(0.0, -24.0, 0.0, 21.0);
+        shGrad.setColorAt(0.0, QColor("#1E3A8A"));
+        shGrad.setColorAt(1.0, QColor("#172554"));
+        p->setPen(QPen(QColor("#60A5FA"), 1.6));
+        p->setBrush(shGrad);
+        p->drawPath(shield);
+
+        // Inner key/lock core
+        p->setPen(QPen(QColor("#F3F4F6"), 1.8));
+        p->setBrush(Qt::NoBrush);
+        p->drawArc(QRectF(-5.0, -12.0, 10.0, 10.0), 0, 180 * 16);
+        p->setBrush(QColor("#F3F4F6"));
         p->setPen(Qt::NoPen);
-        p->setBrush(QColor("#ff5555"));
-        p->drawPath(innerFlame);
-
-        const double brickH = 7.4;
-        const double gap = 2.0;
-        const double startY = -6.0;
-        const double wallLeft = -34.0;
-        const double wallW = 68.0;
-
-        p->setPen(QPen(QColor("#282a36"), 1.0));
-        for (int row = 0; row < 5; ++row) {
-            const double y = startY + row * (brickH + gap);
-            if (row % 2 == 0) {
-                const double w = (wallW - 2.0 * gap) / 3.0;
-                for (int col = 0; col < 3; ++col) {
-                    p->setBrush(col == 1 ? QColor("#b84343") : QColor("#963539"));
-                    p->drawRoundedRect(QRectF(wallLeft + col * (w + gap), y, w, brickH), 1.8, 1.8);
-                }
-            } else {
-                const double edgeW = 11.0;
-                const double midW = (wallW - 2.0 * edgeW - 3.0 * gap) / 2.0;
-                p->setBrush(QColor("#963539"));
-                p->drawRoundedRect(QRectF(wallLeft, y, edgeW, brickH), 1.8, 1.8);
-                p->setBrush(QColor("#b84343"));
-                p->drawRoundedRect(QRectF(wallLeft + edgeW + gap, y, midW, brickH), 1.8, 1.8);
-                p->drawRoundedRect(QRectF(wallLeft + edgeW + 2.0 * gap + midW, y, midW, brickH), 1.8, 1.8);
-                p->setBrush(QColor("#963539"));
-                p->drawRoundedRect(QRectF(wallLeft + wallW - edgeW, y, edgeW, brickH), 1.8, 1.8);
-            }
-        }
+        p->drawRoundedRect(QRectF(-7.5, -6.0, 15.0, 11.0), 2.0, 2.0);
+        p->setBrush(QColor("#1E3A8A"));
+        p->drawEllipse(QPointF(0.0, -1.0), 2.0, 2.0);
     }
 
-    void paintLightningArc(QPainter *p, const QList<QPointF> &pts) const {
-        QPainterPath path;
-        if (pts.isEmpty()) {
-            return;
-        }
-        path.moveTo(pts.first());
-        for (int i = 1; i < pts.size(); ++i) {
-            path.lineTo(pts.at(i));
-        }
-        p->setBrush(Qt::NoBrush);
-        p->setPen(QPen(QColor(139, 233, 253, 125), 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p->drawPath(path);
-        p->setPen(QPen(QColor("#ffffff"), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p->drawPath(path);
+    void paintAlertBadge(QPainter *p) const {
+        p->setPen(QPen(QColor("#EF4444"), 2.0));
+        p->setBrush(QColor("#2A161B"));
+        p->drawEllipse(QPointF(30.0, -30.0), 9.0, 9.0);
+        QFont bf("DejaVu Sans Mono", 8, QFont::Bold);
+        p->setFont(bf);
+        p->setPen(QColor("#FCA5A5"));
+        p->drawText(QRectF(21.0, -39.0, 18.0, 18.0), Qt::AlignCenter, "!");
     }
 
     void paintMonitorIcon(QPainter *p) const {
@@ -666,21 +800,21 @@ private:
             p->setOpacity(0.76);
         }
         p->setPen(Qt::NoPen);
-        p->setBrush(QColor(12, 13, 20, 115));
+        p->setBrush(QColor(9, 10, 14, 125));
         p->drawRoundedRect(QRectF(-33.0, -33.0, 72.0, 58.0), 5.0, 5.0);
         p->drawRoundedRect(QRectF(-20.0, 35.0, 45.0, 6.0), 2.5, 2.5);
 
         const QColor bezelTop = m_mutedState
-                                    ? QColor("#3d4050")
-                                    : (m_elevatedAlert ? QColor("#5e1f26") : QColor("#2c313e"));
+                                    ? QColor("#2B303C")
+                                    : (m_elevatedAlert ? QColor("#451A20") : QColor("#20242E"));
         const QColor chinStand = m_mutedState
-                                     ? QColor("#73788f")
-                                     : (m_elevatedAlert ? QColor("#e06c75") : QColor("#c0c6d2"));
+                                     ? QColor("#6B7280")
+                                     : (m_elevatedAlert ? QColor("#EF4444") : QColor("#9CA3AF"));
 
         if (m_elevatedAlert) {
-            p->setPen(QPen(QColor(255, 85, 85, 110), 2.4));
+            p->setPen(QPen(QColor("#EF4444"), 2.0));
             p->setBrush(Qt::NoBrush);
-            p->drawRoundedRect(QRectF(-37.0, -38.0, 74.0, 60.0), 5.5, 5.5);
+            p->drawRoundedRect(QRectF(-38.0, -39.0, 76.0, 62.0), 6.0, 6.0);
         }
 
         QPainterPath stand;
@@ -689,17 +823,17 @@ private:
         stand.lineTo(13.0, 34.0);
         stand.lineTo(-13.0, 34.0);
         stand.closeSubpath();
-        p->setPen(QPen(QColor("#1e2029"), 1.1));
+        p->setPen(QPen(QColor("#111318"), 1.1));
         p->setBrush(chinStand.darker(115));
         p->drawPath(stand);
         p->setBrush(chinStand);
         p->drawRoundedRect(QRectF(-22.0, 33.0, 44.0, 6.0), 2.2, 2.2);
 
-        p->setPen(QPen(QColor("#181a24"), 1.4));
+        p->setPen(QPen(QColor("#111318"), 1.4));
         p->setBrush(bezelTop);
         p->drawRoundedRect(QRectF(-35.0, -36.0, 70.0, 56.0), 4.5, 4.5);
 
-        p->setPen(QPen(QColor(255, 255, 255, 28), 1.0));
+        p->setPen(QPen(QColor(255, 255, 255, 24), 1.0));
         p->drawLine(QPointF(-31.0, -34.5), QPointF(31.0, -34.5));
 
         p->setPen(Qt::NoPen);
@@ -709,57 +843,57 @@ private:
         p->setBrush(m_statusColor);
         p->drawEllipse(QRectF(-2.5, 13.0, 5.0, 5.0));
 
-        QColor scrTop("#1462cc");
-        QColor scrBot("#0a3f8c");
+        QColor scrTop("#1D4ED8");
+        QColor scrBot("#1E3A8A");
         if (m_mutedState) {
-            scrTop = QColor("#4d5164");
-            scrBot = QColor("#383b4a");
+            scrTop = QColor("#374151");
+            scrBot = QColor("#1F2937");
         } else if (m_elevatedAlert) {
-            scrTop = QColor("#8f2430");
-            scrBot = QColor("#5c161e");
+            scrTop = QColor("#991B1B");
+            scrBot = QColor("#7F1D1D");
         } else if (m_roleTag == "souei") {
-            scrTop = QColor("#c68a14");
-            scrBot = QColor("#8c5e09");
+            scrTop = QColor("#B45309");
+            scrBot = QColor("#78350F");
         } else if (m_roleTag == "ranga-iso") {
-            scrTop = QColor("#1f8554");
-            scrBot = QColor("#135937");
+            scrTop = QColor("#047857");
+            scrBot = QColor("#064E3B");
         } else if (m_roleTag == "ranga-shared") {
-            scrTop = QColor("#8e6c24");
-            scrBot = QColor("#614915");
+            scrTop = QColor("#92400E");
+            scrBot = QColor("#78350F");
         } else if (m_roleTag == "tanuki") {
-            scrTop = QColor("#1b62bd");
-            scrBot = QColor("#0f3f7d");
+            scrTop = QColor("#1D4ED8");
+            scrBot = QColor("#1E3A8A");
         }
         QLinearGradient scrGrad(0.0, -31.0, 0.0, 6.0);
         scrGrad.setColorAt(0.0, scrTop);
         scrGrad.setColorAt(1.0, scrBot);
-        p->setPen(QPen(QColor("#161822"), 1.0));
+        p->setPen(QPen(QColor("#111318"), 1.0));
         p->setBrush(scrGrad);
         p->drawRoundedRect(QRectF(-30.0, -31.0, 60.0, 37.0), 1.5, 1.5);
 
         p->setPen(Qt::NoPen);
         if (m_roleTag == "chronoa") {
-            p->setBrush(QColor("#f8f8f2"));
+            p->setBrush(QColor("#F3F4F6"));
             p->drawRect(QRectF(-10.0, -22.0, 9.0, 9.0));
             p->drawRect(QRectF(1.0, -22.0, 9.0, 9.0));
             p->drawRect(QRectF(-10.0, -11.0, 9.0, 9.0));
             p->drawRect(QRectF(1.0, -11.0, 9.0, 9.0));
         } else if (m_roleTag == "souei") {
-            p->setPen(QPen(QColor("#f8f8f2"), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p->setPen(QPen(QColor("#F3F4F6"), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p->drawLine(QPointF(-14.0, -18.0), QPointF(-7.0, -12.5));
             p->drawLine(QPointF(-7.0, -12.5), QPointF(-14.0, -7.0));
             p->drawLine(QPointF(-2.0, -7.0), QPointF(10.0, -7.0));
         } else if (m_roleTag == "ranga-iso") {
-            p->setPen(QPen(QColor("#f8f8f2"), 2.0));
+            p->setPen(QPen(QColor("#F3F4F6"), 2.0));
             p->setBrush(Qt::NoBrush);
             p->drawArc(QRectF(-7.0, -24.0, 14.0, 14.0), 0, 180 * 16);
-            p->setBrush(QColor("#f8f8f2"));
+            p->setBrush(QColor("#F3F4F6"));
             p->setPen(Qt::NoPen);
             p->drawRoundedRect(QRectF(-10.0, -16.0, 20.0, 14.0), 2.0, 2.0);
             p->setBrush(scrBot);
             p->drawEllipse(QRectF(-2.0, -11.0, 4.0, 4.0));
         } else if (m_roleTag == "tanuki") {
-            p->setPen(QPen(QColor("#f8f8f2"), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p->setPen(QPen(QColor("#F3F4F6"), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p->setBrush(Qt::NoBrush);
             QPainterPath shield;
             shield.moveTo(0.0, -24.0);
@@ -772,16 +906,14 @@ private:
             p->drawPath(shield);
             p->drawEllipse(QPointF(0.0, -13.0), 3.2, 3.2);
         } else {
-            p->setPen(QPen(QColor("#f8f8f2"), 2.0));
+            p->setPen(QPen(QColor("#F3F4F6"), 2.0));
             p->setBrush(Qt::NoBrush);
             p->drawEllipse(QRectF(-13.0, -20.0, 14.0, 14.0));
             p->drawEllipse(QRectF(-1.0, -16.0, 14.0, 14.0));
         }
 
         if (m_elevatedAlert) {
-            paintLightningArc(p, {QPointF(-40.0, -32.0), QPointF(-30.0, -36.0), QPointF(-33.0, -25.0), QPointF(-23.0, -28.0)});
-            paintLightningArc(p, {QPointF(-41.0, 4.0), QPointF(-31.0, 1.0), QPointF(-36.0, 12.0), QPointF(-24.0, 9.0)});
-            paintLightningArc(p, {QPointF(26.0, -26.0), QPointF(38.0, -21.0), QPointF(31.0, -12.0), QPointF(42.0, -8.0)});
+            paintAlertBadge(p);
         }
     }
 
@@ -872,7 +1004,7 @@ public:
         const qreal ux = line.dx() / len;
         const qreal uy = line.dy() / len;
 
-        painter->setPen(QPen(QColor(18, 20, 28, 165), 4.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setPen(QPen(QColor(11, 13, 18, 175), 4.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter->drawLine(line);
 
         const QPen linePen(m_color, 2.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -926,10 +1058,10 @@ public:
             painter->save();
             painter->translate(mid);
             painter->rotate(deg);
-            painter->setPen(QPen(QColor(68, 71, 90, 175), 1.0));
-            painter->setBrush(QColor(24, 26, 36, 236));
+            painter->setPen(QPen(QColor("#2B303C"), 1.0));
+            painter->setBrush(QColor(24, 27, 34, 240));
             painter->drawRoundedRect(QRectF(-halfGap, -8.5, txtW, 17.0), 4.0, 4.0);
-            painter->setPen(QColor("#e6e8ef"));
+            painter->setPen(QColor("#F3F4F6"));
             painter->drawText(QRectF(-halfGap, -8.5, txtW, 17.0), Qt::AlignCenter, m_label);
             painter->restore();
         }
@@ -993,8 +1125,8 @@ protected:
         painter->resetTransform();
         const QRect vp = viewport()->rect();
         QLinearGradient grad(0.0, 0.0, 0.0, static_cast<qreal>(vp.height()));
-        grad.setColorAt(0.0, QColor("#282a36"));
-        grad.setColorAt(1.0, QColor("#242632"));
+        grad.setColorAt(0.0, QColor("#181B22"));
+        grad.setColorAt(1.0, QColor("#111318"));
         painter->fillRect(vp, grad);
         painter->restore();
     }
@@ -1125,6 +1257,7 @@ public:
             m_authToken = qEnvironmentVariable("CIEL_AUTH_TOKEN").trimmed();
         }
 
+        setObjectName("CielMainWindow");
         setWindowTitle("Ciel");
         resize(1480, 880);
         if (statusBar()) {
@@ -1144,6 +1277,20 @@ public:
         appendHelpTableToConsole();
     }
 
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event && event->key() == Qt::Key_Escape) {
+            if (m_inspectorDrawer && m_inspectorDrawer->isVisible()) {
+                m_inspectorDrawer->setVisible(false);
+                if (m_sessionTable) {
+                    m_sessionTable->setFocus();
+                }
+                event->accept();
+                return;
+            }
+        }
+        QMainWindow::keyPressEvent(event);
+    }
+
     void showEvent(QShowEvent *event) override {
         QMainWindow::showEvent(event);
         if (!m_initialSplitApplied) {
@@ -1155,13 +1302,13 @@ public:
 
     void applyDefaultSplitterProportions() {
         if (m_topSplit) {
-            const int w = qMax(m_topSplit->width(), qMax(width() - 6, 1474));
+            const int w = qMax(m_topSplit->width(), qMax(width() - 50, 1430));
             const int leftW = qRound(w * 0.62);
             m_topSplit->setSizes({leftW, w - leftW});
         }
         if (m_topBotSplitter) {
-            const int h = qMax(m_topBotSplitter->height(), qMax(height() - 32, 848));
-            const int topH = qRound(h * 0.48);
+            const int h = qMax(m_topBotSplitter->height(), qMax(height() - 90, 790));
+            const int topH = qRound(h * 0.49);
             m_topBotSplitter->setSizes({topH, h - topH});
         }
     }
@@ -1183,7 +1330,7 @@ public:
                     const QString &consoleScreenshotPath = QString()) {
         auto fail = [this](const QString &msg) -> int {
             fprintf(stderr, "SELF-TEST FAIL: %s\n", msg.toUtf8().constData());
-            appendEventLog("!", "#ff5555", "SELF-TEST FAIL: " + htmlEsc(msg));
+            appendEventLog("!", "#EF4444", "SELF-TEST FAIL: " + htmlEsc(msg));
             return 1;
         };
 
@@ -1249,7 +1396,7 @@ public:
         watchParams["watch_path"] = watchTarget;
         watchParams["watch_timeout_ms"] = 800;
         QJsonObject watchResp;
-        appendCommandEcho("souei --watch-file " + watchTarget);
+        appendCommandEcho("[GUI -> CLI] souei --watch-file " + watchTarget);
         const bool watchRpcOk = executeAction("souei_watch", watchParams, watchResp, false);
         touchTimer.stop();
         if (!watchRpcOk) {
@@ -1274,7 +1421,7 @@ public:
 
         // Verify Ranga isolate (0x3f000000)
         QJsonObject isoResp;
-        appendCommandEcho("ranga --isolate 0x3f000000");
+        appendCommandEcho("[GUI -> CLI] ranga --isolate 0x3f000000");
         if (!executeAction("ranga_isolate", QJsonObject(), isoResp, false)) {
             return fail("ranga_isolate RPC failed");
         }
@@ -1285,7 +1432,7 @@ public:
             return fail("Expected possessor_only=true and perm_hex=3f000000");
         }
 
-        // Verify Ranga purge rejects empty target (OP-05 alert row -> #ff5555) and succeeds on temp artifact
+        // Verify Ranga purge rejects empty target (OP-05 alert row -> #EF4444) and succeeds on temp artifact
         QJsonObject badPurgeResp;
         if (!executeAction("ranga_purge", QJsonObject(), badPurgeResp, false) ||
             badPurgeResp.value("exit_code").toInt(-1) != 1 ||
@@ -1296,12 +1443,12 @@ public:
             bool sawAlertIdColor = false;
             for (int r = 0; r < m_sessionTable->rowCount(); ++r) {
                 if (m_sessionTable->item(r, 0) && m_sessionTable->item(r, 0)->text() == "OP-05") {
-                    sawAlertIdColor = (m_sessionTable->item(r, 0)->foreground().color() == QColor("#ff5555"));
+                    sawAlertIdColor = (m_sessionTable->item(r, 0)->foreground().color() == QColor("#EF4444"));
                     break;
                 }
             }
             if (!sawAlertIdColor) {
-                return fail("Expected alert OP-05 row ID cell to use #ff5555 foreground");
+                return fail("Expected alert OP-05 row ID cell to use #EF4444 foreground");
             }
         }
 
@@ -1317,7 +1464,7 @@ public:
         QJsonObject purgeParams;
         purgeParams["purge_path"] = purgeTarget;
         QJsonObject purgeResp;
-        appendCommandEcho("ranga --purge " + purgeTarget);
+        appendCommandEcho("[GUI -> CLI] ranga --purge " + purgeTarget);
         if (!executeAction("ranga_purge", purgeParams, purgeResp, false)) {
             return fail("ranga_purge RPC failed");
         }
@@ -1333,7 +1480,7 @@ public:
             QJsonObject tp;
             tp["subcommand"] = tCmd;
             QJsonObject tResp;
-            appendCommandEcho("tanuki " + tCmd);
+            appendCommandEcho("[GUI -> CLI] tanuki " + tCmd);
             if (!executeAction("tanuki_exec", tp, tResp, false)) {
                 return fail("tanuki_exec " + tCmd + " RPC failed");
             }
@@ -1352,21 +1499,27 @@ public:
             }
         }
 
-        // Verify Havoc auth banner and neutral [^] output in Operative Console
+        // Verify InfinityCurve identity runtime banner, secret redaction, and absence of stale Havoc holdovers
         {
             const QString bannerPlain = m_operativeConsole->toPlainText();
-            const QString bannerHtml = m_operativeConsole->toHtml();
-            if (!bannerPlain.contains("Operative OP-01..06 authenticated as") ||
-                !bannerPlain.contains("[Pivot: Direct]") ||
-                !bannerHtml.contains("#6272a4") ||
-                !bannerHtml.contains("#ff5555") ||
-                !bannerHtml.contains("#bd93f9") ||
-                !bannerHtml.contains("#ff79c6")) {
-                return fail("Operative Console missing Havoc auth banner or semantic colors");
+            if (!bannerPlain.contains("Ciel Identity Runtime Console") ||
+                !bannerPlain.contains("mTLS 1.3") ||
+                bannerPlain.contains("[Pivot: Direct]") ||
+                bannerPlain.contains("Operative OP-01..06 authenticated as")) {
+                return fail("Operative Console banner missing InfinityCurve header or still contains stale Havoc text");
             }
             handleOperativeCommand("set");
             if (!m_operativeConsole->toPlainText().contains("[^] Targets ->")) {
                 return fail("Operative Console 'set' command did not emit [^] neutral line");
+            }
+            // Verify passphrase redaction on unlock/rotate command echo
+            const QString redactedUnlock = redactConsoleCommand("unlock MyTopSecretPassphrase99!");
+            const QString redactedRotate = redactConsoleCommand("rotate MyRotatedSecretPass99!");
+            const QString redactedLdap = redactConsoleCommand("tanuki ldap --host 10.0.0.1 -p SecretLdapPw!");
+            if (redactedUnlock != "unlock ********" ||
+                redactedRotate != "rotate ********" ||
+                redactedLdap.contains("SecretLdapPw!")) {
+                return fail("Console secret redaction failed");
             }
         }
 
@@ -1383,6 +1536,10 @@ public:
         }
 
         // Verify background poll preserves Raw JSON scroll AND actual visible top block (zero scroll-jump)
+        switchWorkspaceMode(0);
+        if (m_inspectorDrawer) {
+            m_inspectorDrawer->setVisible(true);
+        }
         m_smallTabs->setCurrentIndex(1);
         for (int r = 0; r < m_sessionTable->rowCount(); ++r) {
             if (m_sessionTable->item(r, 0) && m_sessionTable->item(r, 0)->text() == "OP-06") {
@@ -1419,29 +1576,42 @@ public:
                             .arg(topBlockAfter));
         }
 
-        // Verify QTextEdit context pane (OP-06 Tanuki) preserves pixel scroll across background polls
-        m_bottomTabs->setCurrentIndex(7);
+        // Verify Inspector Summary pane (dot-leader view) preserves pixel scroll across background polls
+        m_smallTabs->setCurrentIndex(0);
         QApplication::processEvents();
-        if (QTextEdit *op06Pane = m_contextPanes.value("OP-06", nullptr)) {
-            if (QScrollBar *ctxVb = op06Pane->verticalScrollBar()) {
+        if (m_inspectorSummary) {
+            if (!m_inspectorSummary->toPlainText().contains("...: ")) {
+                return fail("Inspector Summary missing dot-leader key-value formatting");
+            }
+            if (QScrollBar *ctxVb = m_inspectorSummary->verticalScrollBar()) {
                 if (ctxVb->maximum() > 0) {
-                    const int targetCtxScroll = qMin(120, ctxVb->maximum());
+                    const int targetCtxScroll = qMin(80, ctxVb->maximum());
                     ctxVb->setValue(targetCtxScroll);
                     QApplication::processEvents();
-                    const int ctxTopBefore = op06Pane->cursorForPosition(QPoint(8, 8)).blockNumber();
+                    const int ctxTopBefore = m_inspectorSummary->cursorForPosition(QPoint(8, 8)).blockNumber();
                     QJsonObject bgCtxResp;
                     if (!executeAction("full_sync", targetParams(), bgCtxResp, true)) {
-                        return fail("background context scroll-check full_sync failed");
+                        return fail("background inspector scroll-check full_sync failed");
                     }
                     QApplication::processEvents();
-                    const int ctxTopAfter = op06Pane->cursorForPosition(QPoint(8, 8)).blockNumber();
+                    const int ctxTopAfter = m_inspectorSummary->cursorForPosition(QPoint(8, 8)).blockNumber();
                     if (ctxVb->value() != targetCtxScroll || ctxTopAfter != ctxTopBefore) {
-                        return fail(QString("Background poll jumped OP-06 context scroll (%1->%2, block %3->%4)")
+                        return fail(QString("Background poll jumped Inspector scroll (%1->%2, block %3->%4)")
                                         .arg(targetCtxScroll).arg(ctxVb->value())
                                         .arg(ctxTopBefore).arg(ctxTopAfter));
                     }
                 }
             }
+        }
+
+        // Verify Escape key closes Inspector Drawer and clicking a row re-opens it
+        {
+            QKeyEvent escEv(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(this, &escEv);
+            if (m_inspectorDrawer && m_inspectorDrawer->isVisible()) {
+                return fail("Escape key did not close Inspector Drawer");
+            }
+            m_inspectorDrawer->setVisible(true);
         }
 
         // Verify default splitter proportions (60-64% left, 48-50% top) and Session Graph readability
@@ -1476,22 +1646,22 @@ public:
             auto *alertNode = new CielGraphNode(
                 CielGraphNode::NodeKind::OperativeMonitor, "OP-99",
                 "OP-99 @ chronoa\\tgt", "[CORP.LOCAL\\svc :: CLOCK_SKEW_VIOLATION]",
-                "chronoa", QColor("#ff5555"), true, false);
+                "chronoa", QColor("#EF4444"), true, false);
             auto *revokedNode = new CielGraphNode(
                 CielGraphNode::NodeKind::OperativeMonitor, "OP-98",
                 "OP-98 @ ranga\\ses", "[linux-kernel\\svc :: REVOKED]",
-                "ranga-iso", QColor("#9aa5ce"), false, true);
+                "ranga-iso", QColor("#9CA3AF"), false, true);
             alertNode->setPos(160.0, 100.0);
             revokedNode->setPos(460.0, 160.0);
             checkScene.addItem(alertNode);
             checkScene.addItem(revokedNode);
-            checkScene.addItem(new CielGraphEdge(alertNode, revokedNode, QColor("#ff5555"), "skew-alert", false));
+            checkScene.addItem(new CielGraphEdge(alertNode, revokedNode, QColor("#EF4444"), "skew-alert", false));
             QImage offImg(640, 280, QImage::Format_ARGB32);
-            offImg.fill(QColor("#282a36"));
+            offImg.fill(QColor("#181B22"));
             QPainter offP(&offImg);
             checkScene.render(&offP);
             offP.end();
-            if (offImg.pixelColor(160, 100) == QColor("#282a36")) {
+            if (offImg.pixelColor(160, 100) == QColor("#181B22")) {
                 return fail("Offscreen alert/revoked graph node render produced blank pixels");
             }
 
@@ -1551,10 +1721,12 @@ public:
         }
 
         if (!screenshotPath.isEmpty()) {
+            switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(0);
             m_smallTabs->setCurrentIndex(0);
-            m_bottomTabs->setCurrentIndex(m_op01TabIdx);
+            m_bottomTabs->setCurrentIndex(m_eventTabIdx);
             m_sessionTable->selectRow(0);
+            showRowJson(0);
             QApplication::processEvents();
             QApplication::processEvents();
             const QPixmap tableShot = grab();
@@ -1564,24 +1736,23 @@ public:
         }
 
         if (!altScreenshotPath.isEmpty()) {
-            m_mainViewTabs->setCurrentIndex(0);
-            m_smallTabs->setCurrentIndex(1);
-            m_sessionTable->selectRow(0);
-            showRowJson(0);
-            m_bottomTabs->setCurrentIndex(m_listenersTabIdx);
+            switchWorkspaceMode(1);
+            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
             QApplication::processEvents();
             QApplication::processEvents();
             const QPixmap altShot = grab();
             if (altShot.isNull() || !altShot.save(altScreenshotPath, "PNG")) {
                 return fail("Failed saving alternate screenshot");
             }
-            m_smallTabs->setCurrentIndex(0);
-            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
+            switchWorkspaceMode(0);
         }
 
         if (!consoleScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(0);
-            m_smallTabs->setCurrentIndex(0);
+            m_smallTabs->setCurrentIndex(1);
+            m_sessionTable->selectRow(0);
+            showRowJson(0);
             m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
             QApplication::processEvents();
             QApplication::processEvents();
@@ -1592,7 +1763,9 @@ public:
         }
 
         if (!graphScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(1);
+            m_smallTabs->setCurrentIndex(0);
             m_graphUserZoomed = false;
             rebuildSessionGraph();
             QApplication::processEvents();
@@ -1637,6 +1810,22 @@ public slots:
     }
 
 private:
+    void switchWorkspaceMode(int modeIdx) {
+        if (!m_workspaceStack) {
+            return;
+        }
+        const int clamped = qBound(0, modeIdx, m_workspaceStack->count() - 1);
+        m_workspaceStack->setCurrentIndex(clamped);
+        for (int i = 0; i < m_railBtns.size(); ++i) {
+            if (m_railBtns.at(i)) {
+                m_railBtns.at(i)->setChecked(i == clamped);
+            }
+        }
+        if (clamped == 0 && m_mainViewTabs && m_mainViewTabs->currentIndex() == 1) {
+            rebuildSessionGraph();
+        }
+    }
+
     void maybeLoadProfileFromDb() {
         if (!m_dbConnected || m_vaultLocked || m_profileLoadedFromDb || m_actionInFlight) {
             return;
@@ -1671,6 +1860,7 @@ private:
         QJsonObject profResp;
         (void)executeAction("profile_save", targetParams(), profResp, true);
     }
+
     void commitTargetFieldsFromEdits() {
         if (m_ccacheEdit) {
             m_committedCcache = m_ccacheEdit->text().trimmed();
@@ -1729,149 +1919,22 @@ private:
         m_actPoll = mCiel->addAction("Background Monitor (3s)");
         m_actPoll->setCheckable(true);
         mCiel->addSeparator();
+        QAction *actAuditMatrix = mCiel->addAction("Run Host Audit Matrix (audit)");
+        QAction *actHelpCmd = mCiel->addAction("Print Console Commands");
+        QAction *actClearConsole = mCiel->addAction("Clear Console");
+        mCiel->addSeparator();
         QAction *actExit = mCiel->addAction("Exit");
         connect(actSync, &QAction::triggered, this, [this]() { runFullSync(false); });
         connect(m_actPoll, &QAction::toggled, this, [this](bool on) {
             if (on) {
                 m_pollTimer.start(3000);
-                appendEventLog("*", "#8be9fd", "Background telemetry monitor enabled (3000ms, diff-only)");
+                appendEventLog("*", "#60A5FA", "Background telemetry monitor enabled (3000ms, diff-only)");
             } else {
                 m_pollTimer.stop();
-                appendEventLog("*", "#8be9fd", "Background telemetry monitor paused");
+                appendEventLog("*", "#60A5FA", "Background telemetry monitor paused");
             }
+            updateStatusStrip();
         });
-        connect(actExit, &QAction::triggered, this, &QWidget::close);
-
-        QMenu *mView = mb->addMenu("View");
-        QAction *actTable = mView->addAction("Session View -> Table");
-        QAction *actGraph = mView->addAction("Session View -> Graph");
-        mView->addSeparator();
-        QAction *actEvents = mView->addAction("Event Viewer");
-        QAction *actJson = mView->addAction("Raw Telemetry (JSON)");
-        mView->addSeparator();
-        QAction *actTeamserver = mView->addAction("Teamserver Status");
-        QAction *actViewConsole = mView->addAction("Operative Console");
-        QAction *actListeners = mView->addAction("Listeners & Target Config");
-        connect(actTable, &QAction::triggered, this, [this]() { m_mainViewTabs->setCurrentIndex(0); });
-        connect(actGraph, &QAction::triggered, this, [this]() {
-            m_mainViewTabs->setCurrentIndex(1);
-            rebuildSessionGraph();
-        });
-        connect(actEvents, &QAction::triggered, this, [this]() { m_smallTabs->setCurrentIndex(0); });
-        connect(actJson, &QAction::triggered, this, [this]() { m_smallTabs->setCurrentIndex(1); });
-        connect(actTeamserver, &QAction::triggered, this, [this]() { m_bottomTabs->setCurrentIndex(0); });
-        connect(actViewConsole, &QAction::triggered, this, [this]() {
-            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
-            if (m_operativeInput) {
-                m_operativeInput->setFocus();
-            }
-        });
-        connect(actListeners, &QAction::triggered, this, [this]() { m_bottomTabs->setCurrentIndex(m_listenersTabIdx); });
-
-        QMenu *mOps = mb->addMenu("Operatives");
-        QAction *actSouei = mOps->addAction("Souei: Probe /proc/keys & KCM");
-        QAction *actWatch = mOps->addAction("Souei: Watch File (Inotify)...");
-        QAction *actChronoa = mOps->addAction("Chronoa: Audit Active CCACHE");
-        QAction *actRenew = mOps->addAction("Chronoa: Renew TGT (kinit -R)");
-        mOps->addSeparator();
-        QAction *actRangaStatus = mOps->addAction("Ranga: Inspect Session Keyring");
-        QAction *actIso = mOps->addAction("Ranga: Isolate 0x3f000000 (LD_PRELOAD)");
-        QAction *actIsoWrap = mOps->addAction("Ranga: Isolate 0x3f000000 (Wrapper)");
-        QAction *actPurge = mOps->addAction("Ranga: 3-Pass NIST Purge File...");
-
-        connect(actSouei, &QAction::triggered, this, [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchFromUi("souei_probe", targetParams(), "souei --probe");
-        });
-        connect(actWatch, &QAction::triggered, this, [this]() { promptAndWatchFile(); });
-        connect(actChronoa, &QAction::triggered, this, [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchFromUi("chronoa_check", targetParams(), "chronoa --ccache");
-        });
-        connect(actRenew, &QAction::triggered, this, [this]() {
-            commitTargetFieldsFromEdits();
-            QJsonObject p = targetParams();
-            p["renew"] = true;
-            dispatchFromUi("chronoa_check", p, "chronoa --renew (kinit -R)");
-        });
-        connect(actRangaStatus, &QAction::triggered, this, [this]() {
-            dispatchFromUi("ranga_status", QJsonObject(), "ranga --status");
-        });
-        connect(actIso, &QAction::triggered, this, [this]() {
-            dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate");
-        });
-        connect(actIsoWrap, &QAction::triggered, this, [this]() {
-            QJsonObject p;
-            p["isolate_mode"] = "wrapper";
-            dispatchFromUi("ranga_isolate", p, "ranga --isolate (wrapper)");
-        });
-        connect(actPurge, &QAction::triggered, this, [this]() { promptAndPurgeFile(); });
-
-        QMenu *mTanuki = mb->addMenu("Tanuki");
-        auto addTanukiMenuItem = [&](const QString &label, const QString &subcmd, const QString &defaultArg = QString()) {
-            QAction *act = mTanuki->addAction(label);
-            connect(act, &QAction::triggered, this, [this, subcmd, defaultArg]() {
-                commitTargetFieldsFromEdits();
-                dispatchTanuki(subcmd, defaultArg);
-            });
-        };
-        auto addTanukiPromptItem = [&](const QString &label, const QString &subcmd, const QString &promptText, auto presetFn) {
-            QAction *act = mTanuki->addAction(label);
-            connect(act, &QAction::triggered, this, [this, label, subcmd, promptText, presetFn]() {
-                commitTargetFieldsFromEdits();
-                promptTanuki(label, subcmd, promptText, presetFn());
-            });
-        };
-        addTanukiMenuItem("Doctor: Pre-Flight & OPSEC Audit", "doctor");
-        addTanukiMenuItem("Fix: Self-Healing Engine (Dry-Run)", "fix");
-        addTanukiPromptItem("Keytab: Inspect RFC 4120 Binary...", "keytab", "Keytab file path:", [this]() {
-            return m_keytabEdit && !m_keytabEdit->text().trimmed().isEmpty()
-                       ? m_keytabEdit->text().trimmed()
-                       : m_resolvedKeytab;
-        });
-        addTanukiPromptItem("Config: Generate Zero-DNS krb5.conf...", "config",
-                            "Arguments (--realm CORP.LOCAL --kdc <IP> [-o /path/krb5.conf]):",
-                            []() { return QString("--realm CORP.LOCAL --kdc "); });
-        mTanuki->addSeparator();
-        addTanukiPromptItem("Triage: Error Code Lookup...", "triage", "Kerberos / SSSD error query (or SKEW):", []() { return QString("SKEW"); });
-        addTanukiMenuItem("Ladder: 5-Rung Decision Ladder", "ladder");
-        addTanukiMenuItem("NHI: Local Workload Token Scan", "nhi", "scan");
-        addTanukiMenuItem("NHI: Cloud Federation Mesh Probe", "nhi", "mesh");
-        addTanukiPromptItem("Token: Validate Workload JWT...", "token", "JWT file path or raw JWT token:", []() { return QString(); });
-        mTanuki->addSeparator();
-        addTanukiPromptItem("Blast: AD Privilege & Tier Mapper...", "blast", "Principal, keytab/ccache path, or --host <DC>:", [this]() {
-            if (m_keytabEdit && !m_keytabEdit->text().trimmed().isEmpty()) {
-                return QString("--keytab %1").arg(m_keytabEdit->text().trimmed());
-            }
-            if (m_ccacheEdit && !m_ccacheEdit->text().trimmed().isEmpty()) {
-                return QString("--ccache %1").arg(m_ccacheEdit->text().trimmed());
-            }
-            return QString();
-        });
-        addTanukiPromptItem("ADCS: Scan Templates (ESC1-11)...", "adcs", "Templates JSON/LDIF or X.509 certificate path:", []() { return QString(); });
-        addTanukiPromptItem("PAC: Decode MS-PAC Privileges...", "pac", "PAC file path or hex/base64 payload:", []() { return QString(); });
-        addTanukiPromptItem("Shadow: Inspect msDS-KeyCredentialLink...", "shadow", "KeyCredentialLink file path, hex, or DN-Binary:", []() { return QString(); });
-        addTanukiMenuItem("KCM: Triage Local SSSD Caches", "kcm");
-        mTanuki->addSeparator();
-        addTanukiPromptItem("Auth: Live AS-REQ Pre-Auth...", "auth", "Arguments (--keytab <path> --principal <user@REALM> --kdc <IP>):",
-                            [this]() {
-                                const QString kt = (m_keytabEdit && !m_keytabEdit->text().trimmed().isEmpty())
-                                                       ? m_keytabEdit->text().trimmed()
-                                                       : m_resolvedKeytab;
-                                return kt.isEmpty() ? QString("--keytab ") : QString("--keytab %1 --principal ").arg(kt);
-                            });
-        addTanukiPromptItem("TGS: Live Service Ticket Request...", "tgs", "Arguments (--spn <svc/host@REALM> --ccache <path> --kdc <IP>):",
-                            []() { return QString("--spn "); });
-        addTanukiPromptItem("LDAP: AD SPN / Delegation Query...", "ldap", "Arguments (--host <DC_IP> --realm <REALM> --query all):",
-                            []() { return QString("--host  --realm  --query all"); });
-        QAction *actTanukiPurge = mTanuki->addAction("Purge: Wipe Kerberos Caches / Artifact...");
-        connect(actTanukiPurge, &QAction::triggered, this, [this]() { promptTanukiPurge(); });
-        addTanukiMenuItem("Skill: Inspect Tanuki Manifest", "skill");
-
-        QMenu *mScripts = mb->addMenu("Scripts");
-        QAction *actAuditMatrix = mScripts->addAction("Run Host Audit Matrix (audit)");
-        QAction *actHelpCmd = mScripts->addAction("Print Console Commands");
-        QAction *actClearConsole = mScripts->addAction("Clear Console");
         connect(actAuditMatrix, &QAction::triggered, this, [this]() {
             m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
             appendCommandEcho("audit");
@@ -1889,25 +1952,268 @@ private:
             m_operativeConsole->clear();
             appendOperativeBanner();
         });
+        connect(actExit, &QAction::triggered, this, &QWidget::close);
+
+        QMenu *mView = mb->addMenu("View");
+        QAction *actOpsMode = mView->addAction("Workspace -> Operations (Table / Graph)");
+        QAction *actModMode = mView->addAction("Workspace -> Modules Launcher");
+        QAction *actFltMode = mView->addAction("Workspace -> Fleet & History");
+        QAction *actVltMode = mView->addAction("Workspace -> Shuna Vault & PKI");
+        QAction *actCfgMode = mView->addAction("Workspace -> Targets & Sensors");
+        mView->addSeparator();
+        QAction *actTable = mView->addAction("Operations View -> Table");
+        QAction *actGraph = mView->addAction("Operations View -> Session Graph");
+        mView->addSeparator();
+        QAction *actInspector = mView->addAction("Toggle Inspector Drawer");
+        QAction *actTeamserver = mView->addAction("Inspect Teamserver Status");
+        QAction *actViewConsole = mView->addAction("Operative Console");
+        QAction *actEvents = mView->addAction("Event Viewer");
+
+        connect(actOpsMode, &QAction::triggered, this, [this]() { switchWorkspaceMode(0); });
+        connect(actModMode, &QAction::triggered, this, [this]() { switchWorkspaceMode(1); });
+        connect(actFltMode, &QAction::triggered, this, [this]() { switchWorkspaceMode(2); });
+        connect(actVltMode, &QAction::triggered, this, [this]() { switchWorkspaceMode(3); });
+        connect(actCfgMode, &QAction::triggered, this, [this]() { switchWorkspaceMode(4); });
+        connect(actTable, &QAction::triggered, this, [this]() {
+            switchWorkspaceMode(0);
+            m_mainViewTabs->setCurrentIndex(0);
+        });
+        connect(actGraph, &QAction::triggered, this, [this]() {
+            switchWorkspaceMode(0);
+            m_mainViewTabs->setCurrentIndex(1);
+            rebuildSessionGraph();
+        });
+        connect(actInspector, &QAction::triggered, this, [this]() {
+            if (m_inspectorDrawer) {
+                m_inspectorDrawer->setVisible(!m_inspectorDrawer->isVisible());
+            }
+        });
+        connect(actTeamserver, &QAction::triggered, this, [this]() {
+            switchWorkspaceMode(0);
+            showTeamserverInInspector();
+        });
+        connect(actViewConsole, &QAction::triggered, this, [this]() {
+            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
+            if (m_operativeInput) {
+                m_operativeInput->setFocus();
+            }
+        });
+        connect(actEvents, &QAction::triggered, this, [this]() {
+            m_bottomTabs->setCurrentIndex(m_eventTabIdx);
+        });
+
+        QMenu *mOps = mb->addMenu("Operatives");
+        QAction *actSouei = mOps->addAction("Souei: Probe /proc/keys & KCM");
+        QAction *actWatch = mOps->addAction("Souei: Watch File (Inotify)...");
+        QAction *actChronoa = mOps->addAction("Chronoa: Audit Active CCACHE...");
+        QAction *actRenew = mOps->addAction("Chronoa: Renew TGT (kinit -R)");
+        mOps->addSeparator();
+        QAction *actRangaStatus = mOps->addAction("Ranga: Inspect Session Keyring");
+        QAction *actIso = mOps->addAction("Ranga: Isolate 0x3f000000 (LD_PRELOAD)");
+        QAction *actIsoWrap = mOps->addAction("Ranga: Isolate 0x3f000000 (Wrapper)");
+        QAction *actPurge = mOps->addAction("Ranga: 3-Pass NIST Purge File...");
+
+        connect(actSouei, &QAction::triggered, this, [this]() {
+            commitTargetFieldsFromEdits();
+            dispatchFromUi("souei_probe", targetParams(), "souei --probe");
+        });
+        connect(actWatch, &QAction::triggered, this, [this]() { openTempestModuleModal("souei_watch"); });
+        connect(actChronoa, &QAction::triggered, this, [this]() { openTempestModuleModal("chronoa_check"); });
+        connect(actRenew, &QAction::triggered, this, [this]() {
+            commitTargetFieldsFromEdits();
+            QJsonObject p = targetParams();
+            p["renew"] = true;
+            dispatchFromUi("chronoa_check", p, "chronoa --renew (kinit -R)");
+        });
+        connect(actRangaStatus, &QAction::triggered, this, [this]() {
+            dispatchFromUi("ranga_status", QJsonObject(), "ranga --status");
+        });
+        connect(actIso, &QAction::triggered, this, [this]() {
+            dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate");
+        });
+        connect(actIsoWrap, &QAction::triggered, this, [this]() {
+            QJsonObject p;
+            p["isolate_mode"] = "wrapper";
+            dispatchFromUi("ranga_isolate", p, "ranga --isolate (wrapper)");
+        });
+        connect(actPurge, &QAction::triggered, this, [this]() { openTempestModuleModal("ranga_purge"); });
+
+        QMenu *mTanuki = mb->addMenu("Tanuki");
+        auto addTanukiModalItem = [&](const QString &label, const QString &subcmd) {
+            QAction *act = mTanuki->addAction(label);
+            connect(act, &QAction::triggered, this, [this, subcmd]() {
+                commitTargetFieldsFromEdits();
+                openTanukiModuleModal(subcmd);
+            });
+        };
+        addTanukiModalItem("Doctor: Pre-Flight & OPSEC Audit...", "doctor");
+        addTanukiModalItem("Fix: Self-Healing Engine (Dry-Run / Apply)...", "fix");
+        addTanukiModalItem("Keytab: Inspect RFC 4120 Binary...", "keytab");
+        addTanukiModalItem("Config: Generate Zero-DNS krb5.conf...", "config");
+        mTanuki->addSeparator();
+        addTanukiModalItem("Triage: Error Code Lookup...", "triage");
+        addTanukiModalItem("Ladder: 5-Rung Decision Ladder", "ladder");
+        addTanukiModalItem("NHI: Scan / Mesh / Inspect / Live Exchange...", "nhi");
+        addTanukiModalItem("Token: Validate Workload JWT...", "token");
+        mTanuki->addSeparator();
+        addTanukiModalItem("Blast: AD Privilege & Tier Mapper...", "blast");
+        addTanukiModalItem("ADCS: Scan Templates (ESC1-11)...", "adcs");
+        addTanukiModalItem("PAC: Decode MS-PAC Privileges...", "pac");
+        addTanukiModalItem("Shadow: Inspect msDS-KeyCredentialLink...", "shadow");
+        addTanukiModalItem("KCM: Triage Local SSSD Caches...", "kcm");
+        mTanuki->addSeparator();
+        addTanukiModalItem("Auth: Live AS-REQ Pre-Auth...", "auth");
+        addTanukiModalItem("TGS: Live Service Ticket Request...", "tgs");
+        addTanukiModalItem("LDAP: AD SPN / Delegation Query (LDAPS)...", "ldap");
+        QAction *actTanukiPurge = mTanuki->addAction("Purge: Wipe Kerberos Caches / Artifact...");
+        connect(actTanukiPurge, &QAction::triggered, this, [this]() { promptTanukiPurge(); });
+        addTanukiModalItem("Skill: Inspect Tanuki Manifest", "skill");
 
         QMenu *mHelp = mb->addMenu("Help");
         QAction *actAbout = mHelp->addAction("About Ciel");
         connect(actAbout, &QAction::triggered, this, [this]() {
             QMessageBox::information(this, "About Ciel",
-                                     "Ciel Operator Console\nStack: C++20 Qt6 Widgets + Go Teamserver\nOperatives: Souei, Chronoa, Ranga (Tempest + Tanuki)");
+                                     "Ciel Identity Runtime Console v1.0.0\n"
+                                     "Stack: C++20 Qt6 Widgets + Go Teamserver (mTLS 1.3 X25519MLKEM768)\n"
+                                     "Ecosystem: Tanuki + Tempest + Shuna + Ciel");
         });
     }
 
     void buildCentralCielLayout() {
         auto *root = new QWidget(this);
-        auto *rootLayout = new QVBoxLayout(root);
-        rootLayout->setContentsMargins(3, 3, 3, 3);
-        rootLayout->setSpacing(3);
+        root->setObjectName("RootCanvas");
+        auto *outerVBox = new QVBoxLayout(root);
+        outerVBox->setContentsMargins(0, 0, 0, 0);
+        outerVBox->setSpacing(0);
 
+        auto *bodyHBox = new QHBoxLayout();
+        bodyHBox->setContentsMargins(0, 0, 0, 0);
+        bodyHBox->setSpacing(0);
+
+        // 1. Slim Left Activity Rail (InfinityCurve shell)
+        auto *rail = new QWidget(root);
+        rail->setObjectName("LeftRail");
+        rail->setFixedWidth(54);
+        auto *railLay = new QVBoxLayout(rail);
+        railLay->setContentsMargins(0, 6, 0, 6);
+        railLay->setSpacing(4);
+
+        auto addRailButton = [&](int idx, const QString &shortText, const QString &tooltip) {
+            auto *btn = new QPushButton(shortText, rail);
+            btn->setObjectName("RailBtn");
+            btn->setCheckable(true);
+            btn->setToolTip(tooltip);
+            connect(btn, &QPushButton::clicked, this, [this, idx]() { switchWorkspaceMode(idx); });
+            m_railBtns.append(btn);
+            return btn;
+        };
+
+        railLay->addWidget(addRailButton(0, "OPS", "Operations: Live Operatives Matrix, Session Graph & Inspector"));
+        railLay->addWidget(addRailButton(1, "MOD", "Modules: 4-Cycle Tanuki & Tempest Module Launcher"));
+        railLay->addWidget(addRailButton(2, "FLT", "Fleet & History: Decrypted PostgreSQL Hosts & Audit Timeline"));
+        railLay->addWidget(addRailButton(3, "VLT", "Vault & PKI: Shuna Vault Lockout/Rotation/Backup & PQC mTLS PKI"));
+        railLay->addStretch(1);
+        railLay->addWidget(addRailButton(4, "CFG", "Targets & Sensors: Field Target Paths & Transport Sensors"));
+        if (!m_railBtns.isEmpty()) {
+            m_railBtns.first()->setChecked(true);
+        }
+        bodyHBox->addWidget(rail);
+
+        // 2. Main Right Column (Top KPI Bar + Vault Alert Banner + Vertical Splitter [Workspace | 2-Tab Console Dock])
+        auto *mainCol = new QVBoxLayout();
+        mainCol->setContentsMargins(4, 4, 4, 4);
+        mainCol->setSpacing(4);
+
+        // Top KPI & Filter Bar
+        auto *kpiBar = new QWidget(root);
+        kpiBar->setObjectName("TopKpiBar");
+        auto *kpiLay = new QHBoxLayout(kpiBar);
+        kpiLay->setContentsMargins(8, 4, 8, 4);
+        kpiLay->setSpacing(8);
+
+        m_kpiTransportBadge = new QLabel("mTLS 1.3 :: X25519MLKEM768", kpiBar);
+        m_kpiTransportBadge->setObjectName("KpiBadge");
+        m_kpiVaultBadge = new QLabel("Vault: STANDALONE", kpiBar);
+        m_kpiVaultBadge->setObjectName("KpiBadge");
+        m_kpiOpsBadge = new QLabel("Operatives: 0", kpiBar);
+        m_kpiOpsBadge->setObjectName("KpiBadge");
+        m_kpiFreshnessLabel = new QLabel("Sync: waiting", kpiBar);
+        m_kpiFreshnessLabel->setObjectName("MutedLabel");
+
+        m_filterEdit = new QLineEdit(kpiBar);
+        m_filterEdit->setObjectName("FilterInput");
+        m_filterEdit->setPlaceholderText("Filter operatives by ID, module, target, or status...");
+        m_filterEdit->setMinimumWidth(220);
+        connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString &txt) {
+            applySessionTableFilter(txt);
+        });
+
+        auto *btnTableMode = new QPushButton("Table", kpiBar);
+        btnTableMode->setObjectName("SecondaryBtn");
+        connect(btnTableMode, &QPushButton::clicked, this, [this]() {
+            switchWorkspaceMode(0);
+            m_mainViewTabs->setCurrentIndex(0);
+        });
+        auto *btnGraphMode = new QPushButton("Graph", kpiBar);
+        btnGraphMode->setObjectName("SecondaryBtn");
+        connect(btnGraphMode, &QPushButton::clicked, this, [this]() {
+            switchWorkspaceMode(0);
+            m_mainViewTabs->setCurrentIndex(1);
+            rebuildSessionGraph();
+        });
+        auto *btnInspectToggle = new QPushButton("Inspector", kpiBar);
+        btnInspectToggle->setObjectName("SecondaryBtn");
+        connect(btnInspectToggle, &QPushButton::clicked, this, [this]() {
+            switchWorkspaceMode(0);
+            if (m_inspectorDrawer) {
+                m_inspectorDrawer->setVisible(!m_inspectorDrawer->isVisible());
+            }
+        });
+        auto *btnSyncNow = new QPushButton("Sync Now", kpiBar);
+        btnSyncNow->setObjectName("PrimaryBtn");
+        connect(btnSyncNow, &QPushButton::clicked, this, [this]() { runFullSync(false); });
+
+        kpiLay->addWidget(m_kpiTransportBadge);
+        kpiLay->addWidget(m_kpiVaultBadge);
+        kpiLay->addWidget(m_kpiOpsBadge);
+        kpiLay->addWidget(m_kpiFreshnessLabel);
+        kpiLay->addStretch(1);
+        kpiLay->addWidget(m_filterEdit);
+        kpiLay->addWidget(btnTableMode);
+        kpiLay->addWidget(btnGraphMode);
+        kpiLay->addWidget(btnInspectToggle);
+        kpiLay->addWidget(btnSyncNow);
+        mainCol->addWidget(kpiBar);
+
+        // Top Vault Lockout / Wiped Alert Banner (hidden unless m_vaultLocked or m_vaultWiped)
+        m_vaultBanner = new QWidget(root);
+        m_vaultBanner->setObjectName("VaultBanner");
+        auto *vbLay = new QHBoxLayout(m_vaultBanner);
+        vbLay->setContentsMargins(10, 4, 10, 4);
+        vbLay->setSpacing(10);
+        m_vaultBannerLabel = new QLabel("SHUNA VAULT LOCKED :: Encrypted PostgreSQL fleet operations paused.", m_vaultBanner);
+        m_vaultBannerLabel->setObjectName("VaultBannerText");
+        auto *vbUnlockBtn = new QPushButton("Unlock Vault...", m_vaultBanner);
+        vbUnlockBtn->setObjectName("PrimaryBtn");
+        connect(vbUnlockBtn, &QPushButton::clicked, this, [this]() { promptVaultUnlock(); });
+        auto *vbViewBtn = new QPushButton("Vault & PKI", m_vaultBanner);
+        vbViewBtn->setObjectName("SecondaryBtn");
+        connect(vbViewBtn, &QPushButton::clicked, this, [this]() { switchWorkspaceMode(3); });
+        vbLay->addWidget(m_vaultBannerLabel, 1);
+        vbLay->addWidget(vbUnlockBtn);
+        vbLay->addWidget(vbViewBtn);
+        m_vaultBanner->setVisible(false);
+        mainCol->addWidget(m_vaultBanner);
+
+        // Vertical Splitter: Top = WorkspaceStack, Bottom = 2-Tab Dock (Operative Console | Event Viewer)
         m_topBotSplitter = new QSplitter(Qt::Vertical, root);
         m_topBotSplitter->setHandleWidth(4);
 
-        m_topSplit = new QSplitter(Qt::Horizontal, m_topBotSplitter);
+        m_workspaceStack = new QStackedWidget(m_topBotSplitter);
+        m_workspaceStack->setObjectName("WorkspaceStack");
+
+        // Mode 0: Operations (Left: Operatives Table | Session Graph, Right: Closable Inspector Drawer)
+        m_topSplit = new QSplitter(Qt::Horizontal, m_workspaceStack);
         m_topSplit->setHandleWidth(4);
 
         m_mainViewTabs = new QTabWidget(m_topSplit);
@@ -1915,7 +2221,7 @@ private:
         m_mainViewTabs->setMinimumWidth(460);
         m_sessionTable = buildSessionTable();
         QWidget *graphContainer = buildSessionGraphContainer();
-        m_mainViewTabs->addTab(m_sessionTable, "Sessions");
+        m_mainViewTabs->addTab(m_sessionTable, "Operatives");
         m_mainViewTabs->addTab(graphContainer, "Session Graph");
         connect(m_mainViewTabs, &QTabWidget::currentChanged, this, [this](int idx) {
             if (idx == 1) {
@@ -1923,69 +2229,352 @@ private:
             }
         });
 
-        m_smallTabs = new QTabWidget(m_topSplit);
-        m_smallTabs->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        m_smallTabs->setMinimumWidth(360);
-        m_eventViewer = new QTextEdit(m_smallTabs);
+        m_inspectorDrawer = new QWidget(m_topSplit);
+        m_inspectorDrawer->setObjectName("InspectorDrawer");
+        m_inspectorDrawer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        m_inspectorDrawer->setMinimumWidth(340);
+        auto *inspLay = new QVBoxLayout(m_inspectorDrawer);
+        inspLay->setContentsMargins(0, 0, 0, 0);
+        inspLay->setSpacing(0);
+
+        auto *inspHdr = new QWidget(m_inspectorDrawer);
+        inspHdr->setObjectName("InspectorHeader");
+        auto *inspHdrLay = new QHBoxLayout(inspHdr);
+        inspHdrLay->setContentsMargins(8, 4, 6, 4);
+        inspHdrLay->setSpacing(6);
+        m_inspectorTitleLabel = new QLabel("Inspector :: Select an operative row", inspHdr);
+        m_inspectorTitleLabel->setObjectName("SectionLabel");
+        auto *btnTsInspect = new QPushButton("Teamserver", inspHdr);
+        btnTsInspect->setObjectName("SecondaryBtn");
+        btnTsInspect->setToolTip("Inspect Teamserver mTLS & Shuna Vault telemetry");
+        connect(btnTsInspect, &QPushButton::clicked, this, [this]() { showTeamserverInInspector(); });
+        auto *btnCloseInsp = new QPushButton("Hide [Esc]", inspHdr);
+        btnCloseInsp->setObjectName("SecondaryBtn");
+        btnCloseInsp->setToolTip("Close Inspector Drawer (Escape)");
+        connect(btnCloseInsp, &QPushButton::clicked, this, [this]() {
+            m_inspectorDrawer->setVisible(false);
+            if (m_sessionTable) {
+                m_sessionTable->setFocus();
+            }
+        });
+        inspHdrLay->addWidget(m_inspectorTitleLabel, 1);
+        inspHdrLay->addWidget(btnTsInspect);
+        inspHdrLay->addWidget(btnCloseInsp);
+        inspLay->addWidget(inspHdr);
+
+        m_smallTabs = new QTabWidget(m_inspectorDrawer);
+        m_inspectorSummary = new QTextEdit(m_smallTabs);
+        m_inspectorSummary->setReadOnly(true);
+        m_inspectorSummary->setFont(QFont("DejaVu Sans Mono", 9));
+        m_inspectorSummary->setPlainText(
+            formatDotLeader("Endpoint", m_serverAddr) + "\n" +
+            formatDotLeader("Transport", "mTLS 1.3 (X25519MLKEM768)") + "\n" +
+            formatDotLeader("Auth Binding", "256-bit cert-bound session token") + "\n" +
+            formatDotLeader("State", "Awaiting initial sync..."));
+
+        m_rawTelemetry = new QPlainTextEdit(m_smallTabs);
+        m_rawTelemetry->setReadOnly(true);
+        m_rawTelemetry->setPlaceholderText("Select an operative row in Operatives to inspect raw JSON.");
+        m_smallTabs->addTab(m_inspectorSummary, "Summary");
+        m_smallTabs->addTab(m_rawTelemetry, "Raw JSON");
+        inspLay->addWidget(m_smallTabs, 1);
+
+        m_topSplit->addWidget(m_mainViewTabs);
+        m_topSplit->addWidget(m_inspectorDrawer);
+        m_topSplit->setStretchFactor(0, 62);
+        m_topSplit->setStretchFactor(1, 38);
+        m_topSplit->setSizes({900, 520});
+
+        m_workspaceStack->addWidget(m_topSplit);                 // 0: Operations
+        m_workspaceStack->addWidget(buildModulesPage());         // 1: Modules
+        m_workspaceStack->addWidget(buildFleetAndHistoryPage()); // 2: Fleet & History
+        m_workspaceStack->addWidget(buildVaultAndPkiPage());     // 3: Vault & PKI
+        m_workspaceStack->addWidget(buildTargetsPage());         // 4: Targets & Sensors
+
+        // Bottom Dock: strictly 2 tabs (Operative Console | Event Viewer)
+        m_bottomTabs = new QTabWidget(m_topBotSplitter);
+        m_bottomTabs->setObjectName("BottomDock");
+        m_bottomTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
+        m_bottomTabs->setMinimumHeight(210);
+
+        m_eventViewer = new QTextEdit(m_bottomTabs);
         m_eventViewer->setReadOnly(true);
         m_eventViewer->setFont(QFont("DejaVu Sans Mono", 8));
         m_eventViewer->setLineWrapMode(QTextEdit::WidgetWidth);
         m_eventViewer->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        m_rawTelemetry = new QPlainTextEdit(m_smallTabs);
-        m_rawTelemetry->setReadOnly(true);
-        m_rawTelemetry->setPlaceholderText("Select an operative row in Sessions to inspect raw JSON.");
-        m_smallTabs->addTab(m_eventViewer, "Event Viewer");
-        m_smallTabs->addTab(m_rawTelemetry, "Raw JSON");
 
-        m_topSplit->addWidget(m_mainViewTabs);
-        m_topSplit->addWidget(m_smallTabs);
-        m_topSplit->setStretchFactor(0, 62);
-        m_topSplit->setStretchFactor(1, 38);
-        m_topSplit->setSizes({900, 560});
-
-        m_bottomTabs = new QTabWidget(m_topBotSplitter);
-        m_bottomTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
-        m_bottomTabs->setMinimumHeight(240);
-        auto makeContextPane = [&](const QString &key, const QString &bannerText) {
-            auto *te = new QTextEdit(m_bottomTabs);
-            te->setReadOnly(true);
-            te->setPlainText(bannerText);
-            m_contextPanes[key] = te;
-            return te;
-        };
-        m_bottomTabs->addTab(
-            makeContextPane("TEAMSERVER", "[TEAMSERVER] ciel-teamserver endpoint: " + m_serverAddr + "\n[TEAMSERVER] Auth: Per-session 256-bit token enforced\n[TEAMSERVER] Waiting for initial sync..."),
-            "Teamserver");
-        m_op01TabIdx = m_bottomTabs->addTab(
-            makeContextPane("OP-01", QString("[OP-01] %1@%2 :: /proc/keys + AF_UNIX SO_PEERCRED + inotify observer\nAwaiting live telemetry...").arg(m_localUser, m_localHost)),
-            "OP-01 Souei");
-        m_bottomTabs->addTab(
-            makeContextPane("OP-02", "[OP-02] chronoa :: MIT CCACHE v3/v4 + RFC 4120 clock skew + kinit -R\nAwaiting live telemetry..."),
-            "OP-02 Chronoa");
         m_consoleTabIdx = m_bottomTabs->addTab(buildOperativeConsoleTab(), "Operative Console");
-        m_bottomTabs->addTab(
-            makeContextPane("OP-03", "[OP-03] ranga:ses :: baseline user session keyring inspection\nAwaiting live telemetry..."),
-            "OP-03 Ranga");
-        m_bottomTabs->addTab(
-            makeContextPane("OP-04", "[OP-04] ranga:iso :: possessor-only 0x3f000000 LD_PRELOAD + --isolate\nAwaiting live telemetry..."),
-            "OP-04 Isolate");
-        m_bottomTabs->addTab(
-            makeContextPane("OP-05", "[OP-05] ranga:purge :: 3-pass NIST SP 800-88 wipe + explicit_bzero\nNo purge executed in this session yet."),
-            "OP-05 Purge");
-        m_bottomTabs->addTab(
-            makeContextPane("OP-06", "[OP-06] tanuki :: NHI / Kerberos / AD 18-module engine\nAwaiting live telemetry..."),
-            "OP-06 Tanuki");
-        m_listenersTabIdx = m_bottomTabs->addTab(buildListenersTab(), "Listeners");
+        m_eventTabIdx = m_bottomTabs->addTab(m_eventViewer, "Event Viewer");
         m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
 
-        m_topBotSplitter->addWidget(m_topSplit);
+        m_topBotSplitter->addWidget(m_workspaceStack);
         m_topBotSplitter->addWidget(m_bottomTabs);
-        m_topBotSplitter->setStretchFactor(0, 48);
-        m_topBotSplitter->setStretchFactor(1, 52);
-        m_topBotSplitter->setSizes({408, 440});
+        m_topBotSplitter->setStretchFactor(0, 49);
+        m_topBotSplitter->setStretchFactor(1, 51);
+        m_topBotSplitter->setSizes({405, 420});
 
-        rootLayout->addWidget(m_topBotSplitter);
+        mainCol->addWidget(m_topBotSplitter, 1);
+        bodyHBox->addLayout(mainCol, 1);
+        outerVBox->addLayout(bodyHBox, 1);
+
+        // 3. 1-Line Bottom Status Strip
+        auto *statusStrip = new QWidget(root);
+        statusStrip->setObjectName("StatusBarStrip");
+        statusStrip->setFixedHeight(24);
+        auto *stLay = new QHBoxLayout(statusStrip);
+        stLay->setContentsMargins(10, 2, 10, 2);
+        stLay->setSpacing(16);
+        m_statusTransportLabel = new QLabel("mTLS: OFFLINE", statusStrip);
+        m_statusTransportLabel->setObjectName("StatusStripItem");
+        m_statusCertLabel = new QLabel("Serial: -", statusStrip);
+        m_statusCertLabel->setObjectName("StatusStripItem");
+        m_statusDbLabel = new QLabel("DB: standalone", statusStrip);
+        m_statusDbLabel->setObjectName("StatusStripItem");
+        m_statusVaultLabel = new QLabel("Vault: ephemeral", statusStrip);
+        m_statusVaultLabel->setObjectName("StatusStripItem");
+        m_statusPollLabel = new QLabel("Monitor: PAUSED", statusStrip);
+        m_statusPollLabel->setObjectName("StatusStripItem");
+        m_statusRpcLabel = new QLabel("RPC: IDLE", statusStrip);
+        m_statusRpcLabel->setObjectName("StatusStripItem");
+
+        stLay->addWidget(m_statusTransportLabel);
+        stLay->addWidget(m_statusCertLabel);
+        stLay->addWidget(m_statusDbLabel);
+        stLay->addWidget(m_statusVaultLabel);
+        stLay->addWidget(m_statusPollLabel);
+        stLay->addStretch(1);
+        stLay->addWidget(m_statusRpcLabel);
+        outerVBox->addWidget(statusStrip);
+
         setCentralWidget(root);
+        updateStatusStrip();
+    }
+
+    void applySessionTableFilter(const QString &query) {
+        if (!m_sessionTable) {
+            return;
+        }
+        const QString q = query.trimmed().toLower();
+        for (int r = 0; r < m_sessionTable->rowCount(); ++r) {
+            if (q.isEmpty()) {
+                m_sessionTable->setRowHidden(r, false);
+                continue;
+            }
+            bool match = false;
+            for (int c = 0; c < m_sessionTable->columnCount(); ++c) {
+                if (const QTableWidgetItem *it = m_sessionTable->item(r, c)) {
+                    if (it->text().toLower().contains(q)) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
+            m_sessionTable->setRowHidden(r, !match);
+        }
+    }
+
+    void updateStatusStrip() {
+        if (m_statusTransportLabel) {
+            m_statusTransportLabel->setText(
+                QString("mTLS: %1 (%2)").arg(m_teamserverOnline ? "ONLINE" : "OFFLINE", m_pqcGroup));
+        }
+        if (m_statusCertLabel) {
+            m_statusCertLabel->setText(
+                QString("Serial: %1").arg(m_clientCertSerial.isEmpty() ? "-" : m_clientCertSerial.left(16)));
+        }
+        if (m_statusDbLabel) {
+            m_statusDbLabel->setText(
+                QString("DB: %1").arg(m_dbConnected ? ("PG16/" + m_sslMode) : "standalone"));
+        }
+        if (m_statusVaultLabel) {
+            QString vtxt = "ephemeral";
+            if (m_dbConnected || m_shunaKeyVersion > 0) {
+                if (m_vaultWiped) {
+                    vtxt = "WIPED_LOCKED";
+                } else if (m_vaultLocked) {
+                    vtxt = QString("LOCKED (fails=%1)").arg(m_vaultFailedAttempts);
+                } else {
+                    vtxt = QString("UNLOCKED (kv=%1%2)").arg(m_shunaKeyVersion).arg(m_rotationInProgress ? ", rotating" : "");
+                }
+            }
+            m_statusVaultLabel->setText("Vault: " + vtxt);
+        }
+        if (m_statusPollLabel) {
+            const bool active = m_actPoll && m_actPoll->isChecked();
+            m_statusPollLabel->setText(active ? "Monitor: 3s ACTIVE" : "Monitor: PAUSED");
+        }
+        if (m_kpiTransportBadge) {
+            m_kpiTransportBadge->setText(QString("mTLS 1.3 :: %1").arg(m_pqcGroup));
+        }
+        if (m_kpiVaultBadge) {
+            if (m_vaultWiped) {
+                m_kpiVaultBadge->setText("Vault: WIPED");
+            } else if (m_vaultLocked) {
+                m_kpiVaultBadge->setText("Vault: LOCKED");
+            } else if (m_dbConnected || m_shunaKeyVersion > 0) {
+                m_kpiVaultBadge->setText(QString("Vault: kv=%1").arg(m_shunaKeyVersion));
+            } else {
+                m_kpiVaultBadge->setText("Vault: STANDALONE");
+            }
+        }
+        if (m_kpiOpsBadge) {
+            m_kpiOpsBadge->setText(QString("Operatives: %1").arg(m_snapshots.size()));
+        }
+        if (m_vaultBanner && m_vaultBannerLabel) {
+            const bool showBanner = m_vaultLocked || m_vaultWiped;
+            m_vaultBanner->setVisible(showBanner);
+            if (showBanner) {
+                m_vaultBannerLabel->setText(
+                    QString("SHUNA VAULT %1 :: failed_attempts=%2/5 | retry_after=%3s | wiped=%4")
+                        .arg(m_vaultWiped ? "WIPED & LOCKED" : "LOCKED")
+                        .arg(m_vaultFailedAttempts)
+                        .arg(m_vaultRetryAfterSec)
+                        .arg(m_vaultWiped ? "true (offline recovery required)" : "false"));
+            }
+        }
+        if (m_vaultDetailLabel) {
+            m_vaultDetailLabel->setText(
+                formatDotLeader("Database Mode", m_dbConnected ? ("PostgreSQL 16 (" + m_sslMode + ")") : "Ephemeral Standalone") + "\n" +
+                formatDotLeader("Vault State", m_vaultWiped ? "WIPED_LOCKED" : (m_vaultLocked ? "VAULT_LOCKED" : "UNLOCKED")) + "\n" +
+                formatDotLeader("Active DEK Version", QString::number(m_shunaKeyVersion)) + "\n" +
+                formatDotLeader("Online Rotation", m_rotationInProgress ? "IN_PROGRESS" : "IDLE") + "\n" +
+                formatDotLeader("Failed Unlocks", QString("%1 / 5").arg(m_vaultFailedAttempts)) + "\n" +
+                formatDotLeader("Cooldown / Retry", QString("%1s").arg(m_vaultRetryAfterSec)) + "\n" +
+                formatDotLeader("Strict Wipe Triggered", m_vaultWiped ? "true" : "false") + "\n" +
+                formatDotLeader("Local Blind Host ID", m_hostId.isEmpty() ? "-" : m_hostId.left(24) + "..."));
+        }
+        if (m_pkiDetailLabel) {
+            m_pkiDetailLabel->setText(
+                formatDotLeader("Teamserver Endpoint", m_serverAddr) + "\n" +
+                formatDotLeader("TLS Protocol", "TLS 1.3 Mutual Auth") + "\n" +
+                formatDotLeader("PQC Hybrid Group", m_pqcGroup) + "\n" +
+                formatDotLeader("Client Cert Serial", m_clientCertSerial.isEmpty() ? "-" : m_clientCertSerial) + "\n" +
+                formatDotLeader("Session Token TTL", m_tokenExpiresAt.isEmpty() ? "-" : m_tokenExpiresAt) + "\n" +
+                formatDotLeader("PKI Directory", m_pkiDir));
+        }
+        updateListenersTable();
+    }
+
+    void updateListenersTable() {
+        if (!m_listenersTable || m_listenersTable->rowCount() < 5) {
+            return;
+        }
+        QString rpcHost = "127.0.0.1";
+        quint16 rpcPort = 40056;
+        parseHostPort(m_serverAddr, rpcHost, rpcPort);
+        const QString rpcScope = (rpcHost == "127.0.0.1" || rpcHost == "localhost" || rpcHost == "::1")
+                                     ? "loopback"
+                                     : "remote-rpc";
+
+        auto setCell = [&](int row, int col, const QString &text, const QColor &colr = QColor("#F3F4F6")) {
+            QTableWidgetItem *it = m_listenersTable->item(row, col);
+            if (!it) {
+                it = new QTableWidgetItem();
+                it->setTextAlignment(Qt::AlignCenter);
+                m_listenersTable->setItem(row, col, it);
+            }
+            if (it->text() != text) {
+                it->setText(text);
+                it->setToolTip(text);
+            }
+            it->setForeground(colr);
+        };
+
+        setCell(0, 1, QString("mTLS 1.3 / %1").arg(m_pqcGroup));
+        setCell(0, 2, m_serverAddr);
+        setCell(0, 3, rpcScope);
+        const QString capText = m_dbConnected
+                                    ? QString("PG16:%1 | kv=%2").arg(m_sslMode).arg(m_shunaKeyVersion)
+                                    : QString("standalone | mTLS");
+        setCell(0, 4, capText);
+        if (m_authFailed) {
+            setCell(0, 5, "UNAUTHORIZED", QColor("#EF4444"));
+        } else if (m_vaultLocked) {
+            setCell(0, 5, "VAULT_LOCKED", QColor("#F59E0B"));
+        } else {
+            setCell(0, 5, m_teamserverOnline ? "ONLINE" : "OFFLINE",
+                    m_teamserverOnline ? QColor("#10B981") : QColor("#EF4444"));
+        }
+
+        setCell(1, 2, m_resolvedKcmSocket.isEmpty() ? "none (passive)" : m_resolvedKcmSocket);
+        setCell(1, 3, "uid=" + m_localUid);
+        setCell(2, 2, m_resolvedCCache.isEmpty() ? "auto ($KRB5CCNAME)" : m_resolvedCCache);
+        setCell(2, 4, m_kinitAvailable ? "kinit -R" : "no-kinit");
+        setCell(4, 2, m_resolvedKrb5Conf.isEmpty() ? "/etc/krb5.conf" : m_resolvedKrb5Conf);
+
+        auto syncOpRow = [&](int tableRow, const QString &opId) {
+            if (m_authFailed) {
+                setCell(tableRow, 5, "UNAUTHORIZED", QColor("#EF4444"));
+                return;
+            }
+            if (!m_teamserverOnline) {
+                setCell(tableRow, 5, "OFFLINE", QColor("#EF4444"));
+                return;
+            }
+            if (!m_snapshots.contains(opId)) {
+                setCell(tableRow, 5, "PENDING", QColor("#F59E0B"));
+                return;
+            }
+            const OperativeSnapshot &s = m_snapshots.value(opId);
+            setCell(tableRow, 5, s.status, cielStatusColor(s.status));
+        };
+
+        syncOpRow(1, "OP-01");
+        syncOpRow(2, "OP-02");
+        if (m_snapshots.contains("OP-04")) {
+            syncOpRow(3, "OP-04");
+        } else {
+            syncOpRow(3, "OP-03");
+        }
+        syncOpRow(4, "OP-06");
+    }
+
+    QString buildDotLeaderForSnapshot(const OperativeSnapshot &snap) const {
+        QStringList lines;
+        lines << formatDotLeader("Operative ID", snap.id);
+        lines << formatDotLeader("Operative Engine", snap.operative);
+        lines << formatDotLeader("Active Module", snap.module);
+        lines << formatDotLeader("Status", snap.status);
+        lines << formatDotLeader("Exit Code", QString::number(snap.exitCode));
+        lines << formatDotLeader("Target / Principal", snap.target);
+        lines << formatDotLeader("Permissions / TTL", snap.permOrTtl);
+        lines << formatDotLeader("Skew / Telemetry", snap.skewOrAux);
+        lines << formatDotLeader("Detail Summary", snap.detail);
+        lines << formatDotLeader("Host Context", QString("%1@%2 (uid=%3, %4)").arg(m_localUser, m_localHost, m_localUid, m_localArch));
+        if (snap.rawJson.isObject()) {
+            lines << QString();
+            lines << "--- Structured Telemetry Fields ---";
+            const QJsonObject obj = snap.rawJson.toObject();
+            for (auto it = obj.begin(); it != obj.end(); ++it) {
+                QString vStr;
+                if (it.value().isString()) {
+                    vStr = it.value().toString();
+                } else if (it.value().isBool()) {
+                    vStr = it.value().toBool() ? "true" : "false";
+                } else if (it.value().isDouble()) {
+                    vStr = QString::number(it.value().toVariant().toLongLong());
+                } else if (it.value().isArray()) {
+                    vStr = QString("[%1 item(s)]").arg(it.value().toArray().size());
+                } else if (it.value().isObject()) {
+                    vStr = QString::fromUtf8(QJsonDocument(it.value().toObject()).toJson(QJsonDocument::Compact));
+                }
+                lines << formatDotLeader(it.key(), vStr);
+            }
+        }
+        return lines.join('\n');
+    }
+
+    void showTeamserverInInspector() {
+        if (m_inspectorDrawer) {
+            m_inspectorDrawer->setVisible(true);
+        }
+        if (m_inspectorTitleLabel) {
+            m_inspectorTitleLabel->setText("Inspector :: TEAMSERVER (" + m_serverAddr + ")");
+        }
+        m_inspectedOpId = "TEAMSERVER";
+        if (m_inspectorSummary) {
+            updateEditorPreservingScroll(m_inspectorSummary, m_teamserverSummaryText);
+        }
     }
 
     void showRowJson(int row) {
@@ -1997,6 +2586,23 @@ private:
             return;
         }
         const QString opId = idItem->text();
+        m_inspectedOpId = opId;
+        if (m_inspectorTitleLabel && m_snapshots.contains(opId)) {
+            const OperativeSnapshot &s = m_snapshots.value(opId);
+            m_inspectorTitleLabel->setText(QString("Inspector :: %1 %2 (%3)").arg(s.id, s.operative, s.module));
+        }
+        if (m_inspectorSummary && m_snapshots.contains(opId)) {
+            const QString sumText = buildDotLeaderForSnapshot(m_snapshots.value(opId));
+            if (m_summarySourceOpId == opId) {
+                updateEditorPreservingScroll(m_inspectorSummary, sumText);
+            } else {
+                m_summarySourceOpId = opId;
+                m_inspectorSummary->setPlainText(sumText);
+                if (QScrollBar *vb = m_inspectorSummary->verticalScrollBar()) {
+                    vb->setValue(0);
+                }
+            }
+        }
         if (m_snapshots.contains(opId) && m_snapshots.value(opId).rawJson.isObject()) {
             m_rawShowingExplicitAction = false;
             const QJsonDocument doc(m_snapshots.value(opId).rawJson.toObject());
@@ -2017,48 +2623,41 @@ private:
     }
 
     void focusContextTabForOpId(const QString &opId) {
-        static const QMap<QString, int> tabMap = {
-            {"OP-01", 1},
-            {"OP-02", 2},
-            {"OP-03", 4},
-            {"OP-04", 5},
-            {"OP-05", 6},
-            {"OP-06", 7},
-        };
-        if (tabMap.contains(opId)) {
-            m_bottomTabs->setCurrentIndex(tabMap.value(opId));
+        if (m_inspectorDrawer) {
+            m_inspectorDrawer->setVisible(true);
+        }
+        for (int r = 0; r < m_sessionTable->rowCount(); ++r) {
+            if (m_sessionTable->item(r, 0) && m_sessionTable->item(r, 0)->text() == opId) {
+                showRowJson(r);
+                break;
+            }
         }
     }
 
     QTableWidget *buildSessionTable() {
-        auto *tbl = new QTableWidget(0, 10, this);
+        auto *tbl = new QTableWidget(0, 6, this);
         tbl->setShowGrid(false);
         tbl->setAlternatingRowColors(false);
         tbl->verticalHeader()->setVisible(false);
         tbl->setSelectionBehavior(QAbstractItemView::SelectRows);
         tbl->setSelectionMode(QAbstractItemView::SingleSelection);
         tbl->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        tbl->setFocusPolicy(Qt::NoFocus);
+        tbl->setFocusPolicy(Qt::StrongFocus);
         tbl->setContextMenuPolicy(Qt::CustomContextMenu);
 
         const QStringList headers = {
-            "ID", "Host", "Telemetry", "Principal", "Scope",
-            "Module", "Operative", "Target", "Perm / TTL", "Health"
+            "ID", "Operative", "Module", "Target / Principal", "Perm / TTL / Aux", "Status"
         };
         tbl->setHorizontalHeaderLabels(headers);
         QHeaderView *hdr = tbl->horizontalHeader();
-        hdr->setMinimumSectionSize(54);
+        hdr->setMinimumSectionSize(58);
         hdr->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         hdr->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-        hdr->setSectionResizeMode(2, QHeaderView::Stretch);
-        hdr->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-        hdr->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-        hdr->setSectionResizeMode(5, QHeaderView::Stretch);
-        hdr->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-        hdr->setSectionResizeMode(7, QHeaderView::Stretch);
-        hdr->setSectionResizeMode(8, QHeaderView::Stretch);
-        hdr->setSectionResizeMode(9, QHeaderView::ResizeToContents);
-        tbl->verticalHeader()->setDefaultSectionSize(22);
+        hdr->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        hdr->setSectionResizeMode(3, QHeaderView::Stretch);
+        hdr->setSectionResizeMode(4, QHeaderView::Stretch);
+        hdr->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+        tbl->verticalHeader()->setDefaultSectionSize(24);
 
         connect(tbl, &QTableWidget::currentCellChanged,
                 this, [this](int row, int col, int prevRow, int prevCol) {
@@ -2070,45 +2669,51 @@ private:
         connect(tbl, &QTableWidget::cellClicked,
                 this, [this](int row, int col) {
                     (void)col;
+                    if (m_inspectorDrawer && !m_inspectorDrawer->isVisible()) {
+                        m_inspectorDrawer->setVisible(true);
+                    }
                     showRowJson(row);
                 });
         connect(tbl, &QTableWidget::cellDoubleClicked,
                 this, [this](int row, int col) {
                     (void)col;
-                    showRowJson(row);
-                    if (const QTableWidgetItem *idItem = m_sessionTable->item(row, 0)) {
-                        focusContextTabForOpId(idItem->text());
+                    if (m_inspectorDrawer) {
+                        m_inspectorDrawer->setVisible(true);
                     }
+                    showRowJson(row);
                 });
 
         connect(tbl, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
             QMenu ctx(this);
-            QAction *aInteract = ctx.addAction("Interact (Console)");
+            QAction *aInteract = ctx.addAction("Interact (Operative Console)");
+            QAction *aConfigure = ctx.addAction("Open Module Configuration Modal...");
             ctx.addSeparator();
             QAction *aSouei = ctx.addAction("Probe /proc/keys & KCM (Souei)");
             QAction *aWatch = ctx.addAction("Watch File Inotify (Souei)...");
-            QAction *aChronoa = ctx.addAction("Audit Active CCACHE (Chronoa)");
+            QAction *aChronoa = ctx.addAction("Audit Active CCACHE (Chronoa)...");
             QAction *aRenew = ctx.addAction("Renew TGT via kinit -R (Chronoa)");
             ctx.addSeparator();
             QAction *aIsolate = ctx.addAction("Isolate Session Keyring (Ranga)");
             QAction *aPurge = ctx.addAction("3-Pass NIST Purge File (Ranga)...");
             ctx.addSeparator();
             QMenu *tanukiSub = ctx.addMenu("Tanuki Identity Engine");
-            auto addCtxTanuki = [&](const QString &label, const QString &subcmd, const QString &arg = QString()) {
+            auto addCtxTanuki = [&](const QString &label, const QString &subcmd) {
                 QAction *act = tanukiSub->addAction(label);
-                connect(act, &QAction::triggered, this, [this, subcmd, arg]() {
+                connect(act, &QAction::triggered, this, [this, subcmd]() {
                     commitTargetFieldsFromEdits();
-                    dispatchTanuki(subcmd, arg);
+                    openTanukiModuleModal(subcmd);
                 });
             };
-            addCtxTanuki("Doctor Pre-Flight Audit (+OPSEC)", "doctor");
-            addCtxTanuki("Fix Self-Healing (Dry-Run)", "fix");
-            addCtxTanuki("5-Rung Decision Ladder", "ladder");
-            addCtxTanuki("Triage Error Code (All)", "triage");
-            addCtxTanuki("NHI Local Token Scan", "nhi", "scan");
-            addCtxTanuki("NHI Cloud Mesh Probe", "nhi", "mesh");
-            addCtxTanuki("Triage Local SSSD KCM", "kcm");
-            addCtxTanuki("Inspect Tanuki Manifest", "skill");
+            addCtxTanuki("Doctor Pre-Flight & Enctype Audit...", "doctor");
+            addCtxTanuki("Fix Self-Healing (Dry-Run / Apply)...", "fix");
+            addCtxTanuki("Config Zero-DNS krb5.conf...", "config");
+            addCtxTanuki("5-Rung Decision Ladder...", "ladder");
+            addCtxTanuki("Triage Error Code...", "triage");
+            addCtxTanuki("NHI Scan / Mesh / Live Exchange...", "nhi");
+            addCtxTanuki("AD Blast Radius & Tiering...", "blast");
+            addCtxTanuki("LDAP / LDAPS Directory Query...", "ldap");
+            addCtxTanuki("Live Kerberos Auth (AS-REQ)...", "auth");
+            addCtxTanuki("Live Kerberos Service Ticket (TGS)...", "tgs");
             ctx.addSeparator();
             QAction *aJson = ctx.addAction("Inspect Raw JSON");
 
@@ -2116,15 +2721,19 @@ private:
                 m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
                 m_operativeInput->setFocus();
             });
+            connect(aConfigure, &QAction::triggered, this, [this]() {
+                const QString opId = selectedOperativeId();
+                if (opId == "OP-01") openTempestModuleModal("souei_watch");
+                else if (opId == "OP-02") openTempestModuleModal("chronoa_check");
+                else if (opId == "OP-05") openTempestModuleModal("ranga_purge");
+                else openTanukiModuleModal(m_lastExplicitTanukiSubcmd.isEmpty() ? "doctor" : m_lastExplicitTanukiSubcmd);
+            });
             connect(aSouei, &QAction::triggered, this, [this]() {
                 commitTargetFieldsFromEdits();
                 dispatchFromUi("souei_probe", targetParams(), "souei --probe");
             });
-            connect(aWatch, &QAction::triggered, this, [this]() { promptAndWatchFile(); });
-            connect(aChronoa, &QAction::triggered, this, [this]() {
-                commitTargetFieldsFromEdits();
-                dispatchFromUi("chronoa_check", targetParams(), "chronoa --ccache");
-            });
+            connect(aWatch, &QAction::triggered, this, [this]() { openTempestModuleModal("souei_watch"); });
+            connect(aChronoa, &QAction::triggered, this, [this]() { openTempestModuleModal("chronoa_check"); });
             connect(aRenew, &QAction::triggered, this, [this]() {
                 commitTargetFieldsFromEdits();
                 QJsonObject p = targetParams();
@@ -2134,8 +2743,11 @@ private:
             connect(aIsolate, &QAction::triggered, this, [this]() {
                 dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate");
             });
-            connect(aPurge, &QAction::triggered, this, [this]() { promptAndPurgeFile(); });
-            connect(aJson, &QAction::triggered, this, [this]() { m_smallTabs->setCurrentIndex(1); });
+            connect(aPurge, &QAction::triggered, this, [this]() { openTempestModuleModal("ranga_purge"); });
+            connect(aJson, &QAction::triggered, this, [this]() {
+                if (m_inspectorDrawer) m_inspectorDrawer->setVisible(true);
+                m_smallTabs->setCurrentIndex(1);
+            });
 
             ctx.exec(m_sessionTable->viewport()->mapToGlobal(pos));
         });
@@ -2150,9 +2762,9 @@ private:
         layout->setSpacing(0);
 
         m_graphScene = new QGraphicsScene(this);
-        m_graphScene->setBackgroundBrush(QColor("#282a36"));
+        m_graphScene->setBackgroundBrush(QColor("#181B22"));
         m_graphView = new CielGraphView(m_graphScene, container);
-        m_graphView->setToolTip("Drag nodes, scroll wheel to zoom, click node to inspect JSON");
+        m_graphView->setToolTip("Drag nodes, scroll wheel to zoom, click node to inspect telemetry");
         layout->addWidget(m_graphView, 0, 0);
 
         auto *pillWrap = new QWidget(container);
@@ -2165,13 +2777,13 @@ private:
         pill->setObjectName("GraphZoomPill");
         pill->setStyleSheet(
             "QWidget#GraphZoomPill {"
-            "  background-color: rgba(30, 31, 41, 215);"
-            "  border: 1px solid #44475a;"
+            "  background-color: rgba(24, 27, 34, 230);"
+            "  border: 1px solid #2B303C;"
             "  border-radius: 6px;"
             "}"
             "QWidget#GraphZoomPill QPushButton {"
             "  background-color: transparent;"
-            "  color: #f8f8f2;"
+            "  color: #F3F4F6;"
             "  border: none;"
             "  border-radius: 4px;"
             "  padding: 2px 6px;"
@@ -2180,7 +2792,7 @@ private:
             "  font-weight: bold;"
             "}"
             "QWidget#GraphZoomPill QPushButton:hover {"
-            "  background-color: #44475a;"
+            "  background-color: #2B303C;"
             "}");
         auto *pillLay = new QHBoxLayout(pill);
         pillLay->setContentsMargins(4, 2, 4, 2);
@@ -2226,7 +2838,9 @@ private:
             for (QGraphicsItem *it : items) {
                 if (auto *node = dynamic_cast<CielGraphNode *>(it)) {
                     const QString opId = node->opId();
-                    if (!opId.isEmpty() && m_sessionTable) {
+                    if (opId.isEmpty()) {
+                        showTeamserverInInspector();
+                    } else if (m_sessionTable) {
                         for (int r = 0; r < m_sessionTable->rowCount(); ++r) {
                             if (m_sessionTable->item(r, 0) && m_sessionTable->item(r, 0)->text() == opId) {
                                 m_sessionTable->selectRow(r);
@@ -2292,14 +2906,14 @@ private:
 
         m_operativeInput = new QLineEdit(panel);
         m_operativeInput->setObjectName("OperativeInput");
-        m_operativeInput->setPlaceholderText("Command (help, audit, sync, set, hosts, history, unlock, rotate, backup, souei, chronoa, ranga, tanuki <cmd> ...)");
+        m_operativeInput->setPlaceholderText("Command (help, audit, sync, set, hosts, history, unlock, rotate, backup, session_issue, token_rotate, cert_revoke, souei, chronoa, ranga, tanuki <cmd> ...)");
         const QStringList cmds = {
             "help", "audit", "sync", "set", "hosts", "history", "unlock", "rotate", "backup",
-            "token_rotate", "cert_revoke",
+            "session_issue", "token_rotate", "cert_revoke",
             "souei", "watch", "chronoa", "renew",
             "ranga", "isolate", "purge",
-            "tanuki doctor", "tanuki fix", "tanuki keytab", "tanuki config",
-            "tanuki triage SKEW", "tanuki ladder", "tanuki nhi scan", "tanuki nhi mesh",
+            "tanuki doctor", "tanuki fix", "tanuki fix --apply", "tanuki keytab", "tanuki config",
+            "tanuki triage SKEW", "tanuki ladder", "tanuki nhi scan", "tanuki nhi mesh", "tanuki nhi exchange",
             "tanuki token", "tanuki blast", "tanuki adcs", "tanuki pac", "tanuki shadow",
             "tanuki kcm", "tanuki purge", "tanuki skill", "tanuki help",
             "doctor", "fix", "keytab", "config",
@@ -2321,22 +2935,230 @@ private:
         return panel;
     }
 
-    QWidget *buildListenersTab() {
+    QWidget *buildModulesPage() {
         auto *panel = new QWidget(this);
-        panel->setObjectName("ListenersPanel");
+        panel->setObjectName("ModulesPanel");
         auto *vbox = new QVBoxLayout(panel);
-        vbox->setContentsMargins(8, 6, 8, 8);
+        vbox->setContentsMargins(10, 8, 10, 8);
+        vbox->setSpacing(8);
+
+        auto *hdr = new QLabel("4-Cycle Module Catalog :: Progressive-Disclosure Operator Launcher (Options | Preview & CLI)", panel);
+        hdr->setObjectName("SectionLabel");
+        vbox->addWidget(hdr);
+
+        auto *grid = new QGridLayout();
+        grid->setHorizontalSpacing(10);
+        grid->setVerticalSpacing(8);
+
+        auto makeGroupCard = [&](const QString &title, const QList<QPair<QString, std::function<void()>>> &actions) {
+            auto *card = new QWidget(panel);
+            card->setObjectName("ModuleCard");
+            auto *cl = new QVBoxLayout(card);
+            cl->setContentsMargins(10, 8, 10, 8);
+            cl->setSpacing(6);
+            auto *lbl = new QLabel(title, card);
+            lbl->setObjectName("SectionLabel");
+            cl->addWidget(lbl);
+            auto *bg = new QGridLayout();
+            bg->setHorizontalSpacing(6);
+            bg->setVerticalSpacing(6);
+            for (int i = 0; i < actions.size(); ++i) {
+                auto *b = new QPushButton(actions[i].first, card);
+                b->setObjectName(actions[i].first.contains("Purge") ? "DangerBtn" : "SecondaryBtn");
+                connect(b, &QPushButton::clicked, this, actions[i].second);
+                bg->addWidget(b, i / 3, i % 3);
+            }
+            cl->addLayout(bg);
+            cl->addStretch(1);
+            return card;
+        };
+
+        grid->addWidget(makeGroupCard("Cycle 1A :: Tanuki Pre-Flight, Self-Healing & Zero-DNS Config", {
+            {"Doctor (+OPSEC / Enctype)...", [this]() { openTanukiModuleModal("doctor"); }},
+            {"Fix (Dry-Run / Apply)...", [this]() { openTanukiModuleModal("fix"); }},
+            {"Config (FAST / AES)...", [this]() { openTanukiModuleModal("config"); }},
+            {"Keytab (SHA-256 Redacted)...", [this]() { openTanukiModuleModal("keytab"); }},
+            {"KCM Extractor...", [this]() { openTanukiModuleModal("kcm"); }},
+            {"Error Triage...", [this]() { openTanukiModuleModal("triage"); }},
+            {"5-Rung Decision Ladder", [this]() { dispatchTanuki("ladder"); }},
+            {"Agent Skill Manifest", [this]() { dispatchTanuki("skill"); }},
+            {"Purge Caches (NIST)...", [this]() { promptTanukiPurge(); }},
+        }), 0, 0);
+
+        grid->addWidget(makeGroupCard("Cycle 1B :: Tanuki Kerberos Wire, Verified LDAPS & AD Tiering", {
+            {"Auth TGT (FAST / Armor)...", [this]() { openTanukiModuleModal("auth"); }},
+            {"TGS Service Ticket...", [this]() { openTanukiModuleModal("tgs"); }},
+            {"LDAPS / Directory Recon...", [this]() { openTanukiModuleModal("ldap"); }},
+            {"Blast Radius && Tiering...", [this]() { openTanukiModuleModal("blast"); }},
+            {"AD CS Scanner (ESC1-11)...", [this]() { openTanukiModuleModal("adcs"); }},
+            {"MS-PAC NDR Decoder...", [this]() { openTanukiModuleModal("pac"); }},
+            {"Shadow Credentials...", [this]() { openTanukiModuleModal("shadow"); }},
+        }), 0, 1);
+
+        grid->addWidget(makeGroupCard("Cycle 1C :: Tanuki Non-Human Identity (NHI) & RFC 8693 Exchange", {
+            {"NHI Local Token Scan", [this]() { dispatchTanuki("nhi", "scan"); }},
+            {"NHI Cloud/SPIFFE Mesh...", [this]() { openTanukiModuleModal("nhi"); }},
+            {"NHI Live STS Exchange...", [this]() { openTanukiModuleModal("nhi"); }},
+            {"Validate Workload JWT...", [this]() { openTanukiModuleModal("token"); }},
+        }), 1, 0);
+
+        grid->addWidget(makeGroupCard("Cycle 2 :: Tempest Linux Kernel Keyring, CCACHE & Inotify", {
+            {"Souei Keyring && KCM Probe", [this]() { commitTargetFieldsFromEdits(); dispatchFromUi("souei_probe", targetParams(), "souei --probe"); }},
+            {"Souei Inotify File Watch...", [this]() { openTempestModuleModal("souei_watch"); }},
+            {"Chronoa CCACHE && Skew...", [this]() { openTempestModuleModal("chronoa_check"); }},
+            {"Chronoa Renew (kinit -R)", [this]() { commitTargetFieldsFromEdits(); QJsonObject p = targetParams(); p["renew"] = true; dispatchFromUi("chronoa_check", p, "chronoa --renew (kinit -R)"); }},
+            {"Ranga Baseline Keyring", [this]() { dispatchFromUi("ranga_status", QJsonObject(), "ranga --status"); }},
+            {"Ranga Isolate (0x3f000000)", [this]() { dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate"); }},
+            {"Ranga Wrapper Isolate", [this]() { QJsonObject p; p["isolate_mode"] = "wrapper"; dispatchFromUi("ranga_isolate", p, "ranga --isolate (wrapper)"); }},
+            {"Ranga File Purge + Revoke...", [this]() { openTempestModuleModal("ranga_purge"); }},
+        }), 1, 1);
+
+        vbox->addLayout(grid, 1);
+        return panel;
+    }
+
+    QWidget *buildFleetAndHistoryPage() {
+        auto *panel = new QWidget(this);
+        panel->setObjectName("FleetPanel");
+        auto *vbox = new QVBoxLayout(panel);
+        vbox->setContentsMargins(10, 8, 10, 8);
         vbox->setSpacing(6);
+
+        auto *topRow = new QHBoxLayout();
+        auto *hLbl = new QLabel("Encrypted PostgreSQL 16 Fleet Hosts & Row-Bound AEAD Audit Timeline", panel);
+        hLbl->setObjectName("SectionLabel");
+        auto *btnRefHosts = new QPushButton("Refresh Hosts", panel);
+        btnRefHosts->setObjectName("SecondaryBtn");
+        connect(btnRefHosts, &QPushButton::clicked, this, [this]() { refreshFleetHostsView(); });
+        m_historyFilterCombo = new QComboBox(panel);
+        m_historyFilterCombo->addItems({"All Operatives", "OP-01", "OP-02", "OP-03", "OP-04", "OP-05", "OP-06"});
+        auto *btnRefHist = new QPushButton("Refresh History", panel);
+        btnRefHist->setObjectName("PrimaryBtn");
+        connect(btnRefHist, &QPushButton::clicked, this, [this]() { refreshHistoryTimelineView(); });
+        topRow->addWidget(hLbl, 1);
+        topRow->addWidget(btnRefHosts);
+        topRow->addWidget(m_historyFilterCombo);
+        topRow->addWidget(btnRefHist);
+        vbox->addLayout(topRow);
+
+        m_hostsTable = new QTableWidget(0, 6, panel);
+        m_hostsTable->setShowGrid(false);
+        m_hostsTable->verticalHeader()->setVisible(false);
+        m_hostsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        m_hostsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_hostsTable->setFocusPolicy(Qt::StrongFocus);
+        m_hostsTable->setHorizontalHeaderLabels({"Host ID (HMAC)", "Hostname", "Operator / Arch", "DEK Version", "Status", "Last Seen"});
+        m_hostsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        m_hostsTable->verticalHeader()->setDefaultSectionSize(22);
+        vbox->addWidget(m_hostsTable, 1);
+
+        m_historyTable = new QTableWidget(0, 5, panel);
+        m_historyTable->setShowGrid(false);
+        m_historyTable->verticalHeader()->setVisible(false);
+        m_historyTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        m_historyTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_historyTable->setFocusPolicy(Qt::StrongFocus);
+        m_historyTable->setHorizontalHeaderLabels({"Timestamp", "Operative", "Severity / Exit", "Status", "Decrypted Summary / Target"});
+        m_historyTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        m_historyTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+        m_historyTable->verticalHeader()->setDefaultSectionSize(22);
+        vbox->addWidget(m_historyTable, 2);
+
+        return panel;
+    }
+
+    QWidget *buildVaultAndPkiPage() {
+        auto *panel = new QWidget(this);
+        panel->setObjectName("VaultPanel");
+        auto *hbox = new QHBoxLayout(panel);
+        hbox->setContentsMargins(10, 8, 10, 8);
+        hbox->setSpacing(12);
+
+        // Card 1: Shuna Vault & PostgreSQL Persistence
+        auto *vCard = new QWidget(panel);
+        vCard->setObjectName("VaultCard");
+        auto *vLay = new QVBoxLayout(vCard);
+        vLay->setContentsMargins(12, 10, 12, 10);
+        vLay->setSpacing(8);
+        auto *vTitle = new QLabel("Cycle 3 :: Shuna Envelope Vault & Encrypted PostgreSQL 16", vCard);
+        vTitle->setObjectName("SectionLabel");
+        vLay->addWidget(vTitle);
+
+        m_vaultDetailLabel = new QLabel(vCard);
+        m_vaultDetailLabel->setFont(QFont("DejaVu Sans Mono", 9));
+        m_vaultDetailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        vLay->addWidget(m_vaultDetailLabel, 1);
+
+        auto *vBtnRow = new QHBoxLayout();
+        auto *btnUnlock = new QPushButton("Unlock Vault...", vCard);
+        btnUnlock->setObjectName("PrimaryBtn");
+        connect(btnUnlock, &QPushButton::clicked, this, [this]() { promptVaultUnlock(); });
+        auto *btnRotate = new QPushButton("Rotate DEK (Online)...", vCard);
+        btnRotate->setObjectName("SecondaryBtn");
+        connect(btnRotate, &QPushButton::clicked, this, [this]() { promptVaultRotate(); });
+        auto *btnBackup = new QPushButton("Export SHUNAS1 Backup...", vCard);
+        btnBackup->setObjectName("SecondaryBtn");
+        connect(btnBackup, &QPushButton::clicked, this, [this]() { promptBackupExport(); });
+        vBtnRow->addWidget(btnUnlock);
+        vBtnRow->addWidget(btnRotate);
+        vBtnRow->addWidget(btnBackup);
+        vLay->addLayout(vBtnRow);
+
+        // Card 2: Post-Quantum Hybrid mTLS 1.3 & Session PKI
+        auto *pCard = new QWidget(panel);
+        pCard->setObjectName("PkiCard");
+        auto *pLay = new QVBoxLayout(pCard);
+        pLay->setContentsMargins(12, 10, 12, 10);
+        pLay->setSpacing(8);
+        auto *pTitle = new QLabel("Cycle 3 & 4 :: Post-Quantum mTLS 1.3 (X25519MLKEM768) & CRL Revocation", pCard);
+        pTitle->setObjectName("SectionLabel");
+        pLay->addWidget(pTitle);
+
+        m_pkiDetailLabel = new QLabel(pCard);
+        m_pkiDetailLabel->setFont(QFont("DejaVu Sans Mono", 9));
+        m_pkiDetailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        pLay->addWidget(m_pkiDetailLabel, 1);
+
+        auto *pBtnRow = new QHBoxLayout();
+        auto *btnTokRot = new QPushButton("Rotate Session Token (30s Grace)", pCard);
+        btnTokRot->setObjectName("PrimaryBtn");
+        connect(btnTokRot, &QPushButton::clicked, this, [this]() { handleOperativeCommand("token_rotate"); });
+        auto *btnSessIssue = new QPushButton("Issue Cert-Bound Token...", pCard);
+        btnSessIssue->setObjectName("SecondaryBtn");
+        connect(btnSessIssue, &QPushButton::clicked, this, [this]() { promptSessionIssue(); });
+        auto *btnRevoke = new QPushButton("Revoke Certificate...", pCard);
+        btnRevoke->setObjectName("DangerBtn");
+        connect(btnRevoke, &QPushButton::clicked, this, [this]() { promptCertRevoke(); });
+        pBtnRow->addWidget(btnTokRot);
+        pBtnRow->addWidget(btnSessIssue);
+        pBtnRow->addWidget(btnRevoke);
+        pLay->addLayout(pBtnRow);
+
+        hbox->addWidget(vCard, 1);
+        hbox->addWidget(pCard, 1);
+        return panel;
+    }
+
+    QWidget *buildTargetsPage() {
+        auto *panel = new QWidget(this);
+        panel->setObjectName("TargetsPanel");
+        auto *vbox = new QVBoxLayout(panel);
+        vbox->setContentsMargins(10, 8, 10, 8);
+        vbox->setSpacing(8);
+
+        auto *sLbl = new QLabel("Active Runtime Sensors & Transport Endpoints:", panel);
+        sLbl->setObjectName("SectionLabel");
+        vbox->addWidget(sLbl);
 
         m_listenersTable = new QTableWidget(5, 6, panel);
         m_listenersTable->setShowGrid(false);
         m_listenersTable->verticalHeader()->setVisible(false);
         m_listenersTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_listenersTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        m_listenersTable->setFocusPolicy(Qt::NoFocus);
-        m_listenersTable->setHorizontalHeaderLabels({"Sensor / Listener", "Protocol", "Endpoint / Path", "Scope", "Capability", "Status"});
+        m_listenersTable->setFocusPolicy(Qt::StrongFocus);
+        m_listenersTable->setHorizontalHeaderLabels({"Sensor / Subsystem", "Protocol", "Endpoint / Path", "Scope", "Capability", "Status"});
         m_listenersTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-        m_listenersTable->verticalHeader()->setDefaultSectionSize(22);
+        m_listenersTable->verticalHeader()->setDefaultSectionSize(24);
 
         QString rpcHost = "127.0.0.1";
         quint16 rpcPort = 40056;
@@ -2357,21 +3179,20 @@ private:
                 auto *it = new QTableWidgetItem(defaults[r][c]);
                 it->setTextAlignment(Qt::AlignCenter);
                 if (c == 5) {
-                    it->setForeground(QColor("#ff5555"));
+                    it->setForeground(QColor("#EF4444"));
                 }
                 m_listenersTable->setItem(r, c, it);
             }
         }
         vbox->addWidget(m_listenersTable, 1);
 
-        // Field Target Configuration Strip (real paths; blank = host auto-discovery)
-        auto *cfgLabel = new QLabel("Field Target Paths (leave blank for host auto-discovery):", panel);
+        auto *cfgLabel = new QLabel("Field Target Paths (leave blank for host auto-discovery; auto-synced to encrypted PostgreSQL profile when unlocked):", panel);
         cfgLabel->setObjectName("SectionLabel");
         vbox->addWidget(cfgLabel);
 
         auto *cfgGrid = new QGridLayout();
         cfgGrid->setHorizontalSpacing(6);
-        cfgGrid->setVerticalSpacing(4);
+        cfgGrid->setVerticalSpacing(6);
 
         auto makeBrowseField = [&](int row, int colOffset, const QString &labelText,
                                    const QString &placeholder, QLineEdit *&editOut, const QString &dialogTitle) {
@@ -2415,6 +3236,7 @@ private:
         makeBrowseField(1, 3, "KCM Socket:", "Auto-discover system KCM socket", m_kcmSockEdit, "Select KCM UNIX Socket");
 
         auto *applyBtn = new QPushButton("Apply && Sync", panel);
+        applyBtn->setObjectName("PrimaryBtn");
         applyBtn->setToolTip("Apply Field Target Paths and run a full host sync across Tempest + Tanuki");
         auto *clearBtn = new QPushButton("Reset Auto", panel);
         clearBtn->setObjectName("SecondaryBtn");
@@ -2437,154 +3259,454 @@ private:
         cfgGrid->setColumnStretch(1, 1);
         cfgGrid->setColumnStretch(4, 1);
         vbox->addLayout(cfgGrid);
-
-        // Tempest Runtime Dispatch Row (7 distinct kernel/CCACHE actions)
-        auto *tempestLabel = new QLabel("Tempest Runtime Operatives (Kernel Keyring, CCACHE & Inotify):", panel);
-        tempestLabel->setObjectName("SectionLabel");
-        vbox->addWidget(tempestLabel);
-
-        auto *tempestRow = new QHBoxLayout();
-        tempestRow->setSpacing(6);
-        auto addTempestBtn = [&](const QString &label, const QString &tooltip, auto fn, const QString &objName = QString()) {
-            auto *btn = new QPushButton(label, panel);
-            if (!objName.isEmpty()) {
-                btn->setObjectName(objName);
-            }
-            btn->setToolTip(tooltip);
-            connect(btn, &QPushButton::clicked, this, fn);
-            tempestRow->addWidget(btn);
-        };
-
-        addTempestBtn("Souei Probe", "Audit /proc/keys, session keyring, and host KCM socket (OP-01)", [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchFromUi("souei_probe", targetParams(), "souei --probe");
-        });
-        addTempestBtn("Souei Watch...", "Attach Linux inotify file access watch to a real path (OP-01)", [this]() { promptAndWatchFile(); });
-        addTempestBtn("Chronoa Audit", "Inspect active CCACHE v3/v4 ticket lifetime & cipher (OP-02)", [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchFromUi("chronoa_check", targetParams(), "chronoa --ccache");
-        });
-        addTempestBtn("Renew (kinit -R)", "Execute real kinit -R renewal against active CCACHE (OP-02)", [this]() {
-            commitTargetFieldsFromEdits();
-            QJsonObject p = targetParams();
-            p["renew"] = true;
-            dispatchFromUi("chronoa_check", p, "chronoa --renew (kinit -R)");
-        });
-        addTempestBtn("Ranga Status", "Inspect current process session keyring permissions (OP-03)", [this]() {
-            dispatchFromUi("ranga_status", QJsonObject(), "ranga --status");
-        });
-        addTempestBtn("Ranga Isolate", "Verify 0x3f000000 possessor-only keyring isolation (OP-04)", [this]() {
-            dispatchFromUi("ranga_isolate", QJsonObject(), "ranga --isolate");
-        });
-        addTempestBtn("Ranga Purge File...", "3-pass NIST SP 800-88 wipe & unlink on a single explicit file (OP-05)", [this]() { promptAndPurgeFile(); }, "DangerBtn");
-        tempestRow->addStretch();
-        vbox->addLayout(tempestRow);
-
-        // Tanuki Identity Engine Dispatch Grid (all 18 Tanuki modules)
-        auto *tanukiLabel = new QLabel("Tanuki Identity Engine (NHI, Kerberos & Active Directory):", panel);
-        tanukiLabel->setObjectName("SectionLabel");
-        vbox->addWidget(tanukiLabel);
-
-        auto *btnGrid = new QGridLayout();
-        btnGrid->setHorizontalSpacing(6);
-        btnGrid->setVerticalSpacing(5);
-
-        auto addGridBtn = [&](int row, int col, const QString &label, const QString &tooltip, auto fn, const QString &objName = QString()) {
-            auto *btn = new QPushButton(label, panel);
-            if (!objName.isEmpty()) {
-                btn->setObjectName(objName);
-            }
-            if (!tooltip.isEmpty()) {
-                btn->setToolTip(tooltip);
-            }
-            connect(btn, &QPushButton::clicked, this, fn);
-            btnGrid->addWidget(btn, row, col);
-        };
-
-        // Row 0 (10): Diagnostics, Keytab, Config, Triage, NHI, KCM, Skill
-        addGridBtn(0, 0, "Doctor", "Pre-flight Kerberos, SSSD, and host OPSEC audit", [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchTanuki("doctor");
-        });
-        addGridBtn(0, 1, "Fix (Dry-Run)", "Dry-run self-healing remediation check", [this]() {
-            commitTargetFieldsFromEdits();
-            dispatchTanuki("fix");
-        });
-        addGridBtn(0, 2, "Keytab...", "Inspect RFC 4120 keytab binary", [this]() {
-            commitTargetFieldsFromEdits();
-            promptTanuki("Inspect Keytab", "keytab", "Keytab file path:",
-                         !m_committedKeytab.isEmpty() ? m_committedKeytab : m_resolvedKeytab);
-        });
-        addGridBtn(0, 3, "Config...", "Generate hardened zero-DNS krb5.conf", [this]() {
-            promptTanuki("Generate krb5.conf", "config", "Arguments (--realm CORP.LOCAL --kdc <IP> [-o path]):", "--realm CORP.LOCAL --kdc ");
-        });
-        addGridBtn(0, 4, "Triage...", "Lookup Kerberos/SSSD error code", [this]() {
-            promptTanuki("Error Triage", "triage", "Error code or query:", "SKEW");
-        });
-        addGridBtn(0, 5, "Ladder", "Display 5-rung Tactical Decision Ladder", [this]() { dispatchTanuki("ladder"); });
-        addGridBtn(0, 6, "NHI Scan", "Scan local filesystem for workload tokens", [this]() { dispatchTanuki("nhi", "scan"); });
-        addGridBtn(0, 7, "NHI Mesh", "Probe cloud / SPIFFE workload federation mesh", [this]() { dispatchTanuki("nhi", "mesh"); });
-        addGridBtn(0, 8, "KCM Triage", "Inspect/extract local SSSD KCM caches", [this]() { dispatchTanuki("kcm"); });
-        addGridBtn(0, 9, "Skill", "Inspect Tanuki capability manifest", [this]() { dispatchTanuki("skill"); });
-
-        // Row 1 (9): AD Analysis, Protocol Decoding, Live Wire & Cache Purge
-        addGridBtn(1, 0, "Blast...", "Compute AD privilege tier & blast radius", [this]() {
-            commitTargetFieldsFromEdits();
-            QString preset;
-            if (!m_committedKeytab.isEmpty()) {
-                preset = "--keytab " + m_committedKeytab;
-            } else if (!m_committedCcache.isEmpty()) {
-                preset = "--ccache " + m_committedCcache;
-            }
-            promptTanuki("AD Blast Radius", "blast", "Principal, --keytab/--ccache, or --host <DC>:", preset);
-        });
-        addGridBtn(1, 1, "ADCS...", "Scan AD CS templates/certs for ESC1-ESC11", [this]() {
-            promptTanuki("ADCS Scanner", "adcs", "Templates JSON/LDIF or X.509 cert path:", QString());
-        });
-        addGridBtn(1, 2, "PAC...", "Decode MS-PAC privilege buffers", [this]() {
-            promptTanuki("PAC Decoder", "pac", "PAC file path or hex/base64:", QString());
-        });
-        addGridBtn(1, 3, "Shadow...", "Decode msDS-KeyCredentialLink blob", [this]() {
-            promptTanuki("Shadow Credentials", "shadow", "KeyCredentialLink file path, hex, or DN-Binary:", QString());
-        });
-        addGridBtn(1, 4, "Token...", "Validate RFC 8693 workload JWT", [this]() {
-            promptTanuki("Workload JWT", "token", "JWT file path or raw JWT:", QString());
-        });
-        addGridBtn(1, 5, "LDAP...", "Query Active Directory over LDAP/LDAPS", [this]() {
-            promptTanuki("AD LDAP Query", "ldap", "Arguments (--host <DC_IP> --realm <REALM> --query all):", "--host  --realm  --query all");
-        });
-        addGridBtn(1, 6, "Auth (TGT)...", "Acquire Kerberos TGT via AS-REQ pre-auth", [this]() {
-            commitTargetFieldsFromEdits();
-            promptTanuki("Live Kerberos Auth", "auth", "Arguments (--keytab <path> --principal <p> --kdc <IP>):",
-                         !m_committedKeytab.isEmpty()
-                             ? ("--keytab " + m_committedKeytab + " --principal ")
-                             : "--keytab ");
-        });
-        addGridBtn(1, 7, "TGS...", "Request Kerberos TGS service ticket", [this]() {
-            commitTargetFieldsFromEdits();
-            const QString cc = !m_committedCcache.isEmpty() ? m_committedCcache : m_resolvedCCache;
-            promptTanuki("Live Kerberos TGS", "tgs", "Arguments (--spn <svc/host@REALM> [--ccache <path>] --kdc <IP>):",
-                         cc.isEmpty() ? "--spn " : ("--spn  --ccache " + cc + " --kdc "));
-        });
-        addGridBtn(1, 8, "Purge Caches...", "Sweep Kerberos caches/temp configs (--all or explicit path) via Tanuki", [this]() {
-            promptTanukiPurge();
-        }, "DangerBtn");
-
-        vbox->addLayout(btnGrid);
         return panel;
     }
 
-    void promptTanuki(const QString &title, const QString &subcmd, const QString &promptText, const QString &preset) {
-        bool ok = false;
-        const QString val = QInputDialog::getText(this, title, promptText, QLineEdit::Normal, preset, &ok).trimmed();
-        if (!ok || val.isEmpty()) {
+    void refreshFleetHostsView() {
+        appendCommandEcho("[GUI -> CLI] hosts");
+        QJsonObject resp;
+        if (!executeAction("host_list", QJsonObject(), resp, false) || !m_hostsTable) {
             return;
         }
-        const QStringList parts = splitCommandLineArgs(val);
-        if (parts.size() > 1) {
-            dispatchTanuki(subcmd, QString(), parts);
-        } else {
-            dispatchTanuki(subcmd, val);
+        const QJsonArray hosts = resp.value("data").toObject().value("hosts").toArray();
+        m_hostsTable->setRowCount(0);
+        for (int i = 0; i < hosts.size(); ++i) {
+            const QJsonObject o = hosts.at(i).toObject();
+            const QJsonObject m = o.value("meta").toObject();
+            m_hostsTable->insertRow(i);
+            const QStringList cols = {
+                o.value("host_id").toString().left(16),
+                m.value("hostname").toString(),
+                QString("%1 (%2) / %3").arg(m.value("username").toString()).arg(m.value("uid").toInt()).arg(m.value("arch").toString()),
+                QString("v%1").arg(o.value("key_version").toInt()),
+                o.value("status").toString(),
+                o.value("last_seen_at").toString().left(19)
+            };
+            for (int c = 0; c < cols.size(); ++c) {
+                auto *it = new QTableWidgetItem(cols.at(c));
+                it->setTextAlignment(Qt::AlignCenter);
+                if (c == 4) {
+                    it->setForeground(cielStatusColor(cols.at(c)));
+                }
+                m_hostsTable->setItem(i, c, it);
+            }
+        }
+    }
+
+    void refreshHistoryTimelineView() {
+        QJsonObject p;
+        p["limit"] = 50;
+        QString cliCmd = "history";
+        if (m_historyFilterCombo && m_historyFilterCombo->currentIndex() > 0) {
+            const QString op = m_historyFilterCombo->currentText();
+            p["operative_id"] = op;
+            cliCmd += " " + op;
+        }
+        appendCommandEcho("[GUI -> CLI] " + cliCmd);
+        QJsonObject resp;
+        if (!executeAction("history_list", p, resp, false) || !m_historyTable) {
+            return;
+        }
+        const QJsonArray evs = resp.value("data").toObject().value("events").toArray();
+        m_historyTable->setRowCount(0);
+        for (int i = 0; i < evs.size(); ++i) {
+            const QJsonObject ev = evs.at(i).toObject();
+            const QJsonObject det = ev.value("detail").toObject();
+            m_historyTable->insertRow(i);
+            const QString statusStr = ev.value("status").toString();
+            const QStringList cols = {
+                ev.value("created_at").toString().left(19),
+                ev.value("operative_id").toString(),
+                QString("%1 (rc=%2)").arg(ev.value("severity").toString()).arg(ev.value("exit_code").toInt()),
+                statusStr,
+                QString("[%1] %2").arg(det.value("action").toString(), det.value("summary").toString())
+            };
+            for (int c = 0; c < cols.size(); ++c) {
+                auto *it = new QTableWidgetItem(cols.at(c));
+                if (c < 4) it->setTextAlignment(Qt::AlignCenter);
+                if (c == 3) it->setForeground(cielStatusColor(statusStr));
+                m_historyTable->setItem(i, c, it);
+            }
+        }
+    }
+
+    void promptVaultUnlock() {
+        bool ok = false;
+        const QString pass = QInputDialog::getText(
+            this, "Unlock Shuna Vault", "Enter Shuna vault passphrase:", QLineEdit::Password, QString(), &ok);
+        if (!ok || pass.isEmpty()) {
+            return;
+        }
+        appendCommandEcho("[GUI -> CLI] unlock ********");
+        QJsonObject p;
+        p["passphrase"] = pass;
+        QJsonObject resp;
+        if (executeAction("vault_unlock", p, resp, false) && resp.value("ok").toBool(false)) {
+            m_vaultLocked = false;
+            m_vaultWiped = false;
+            m_vaultFailedAttempts = 0;
+            m_vaultRetryAfterSec = 0;
+            updateListenersTable();
+            updateStatusStrip();
+            maybeLoadProfileFromDb();
+        }
+    }
+
+    void promptVaultRotate() {
+        bool ok = false;
+        const QString pass = QInputDialog::getText(
+            this, "Online Shuna DEK Rotation",
+            "Optional new vault passphrase (leave empty to re-key with active passphrase):",
+            QLineEdit::Password, QString(), &ok);
+        if (!ok) {
+            return;
+        }
+        appendCommandEcho(pass.isEmpty() ? "[GUI -> CLI] rotate" : "[GUI -> CLI] rotate ********");
+        QJsonObject p;
+        if (!pass.isEmpty()) {
+            p["new_passphrase"] = pass;
+        }
+        QJsonObject resp;
+        (void)executeAction("vault_rotate", p, resp, false);
+        updateStatusStrip();
+    }
+
+    void promptBackupExport() {
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, "Export Encrypted SHUNAS1 Backup",
+            "Backup filename (confined under <workDir>/backups):",
+            QLineEdit::Normal, "ciel-fleet.shunas1", &ok).trimmed();
+        if (!ok) {
+            return;
+        }
+        appendCommandEcho("[GUI -> CLI] backup " + name);
+        QJsonObject p;
+        if (!name.isEmpty()) {
+            p["out_path"] = name;
+        }
+        QJsonObject resp;
+        (void)executeAction("backup_export", p, resp, false);
+    }
+
+    void promptSessionIssue() {
+        bool ok = false;
+        const QString fp = QInputDialog::getText(
+            this, "Issue Cert-Bound Session Token",
+            "Target mTLS Client Certificate SHA-256 Fingerprint (64 lowercase hex chars):",
+            QLineEdit::Normal, QString(), &ok).trimmed();
+        if (!ok || fp.isEmpty()) {
+            return;
+        }
+        handleOperativeCommand("session_issue " + fp);
+    }
+
+    void promptCertRevoke() {
+        bool ok = false;
+        const QString serial = QInputDialog::getText(
+            this, "Revoke mTLS Client Certificate",
+            "Certificate serial (hex) and optional reason (e.g. <serial_hex> key_compromise):",
+            QLineEdit::Normal, QString(), &ok).trimmed();
+        if (!ok || serial.isEmpty()) {
+            return;
+        }
+        handleOperativeCommand("cert_revoke " + serial);
+    }
+
+    void openTanukiModuleModal(const QString &subcmd) {
+        commitTargetFieldsFromEdits();
+        QDialog dlg(this);
+        dlg.setObjectName("ModuleModal");
+        dlg.setWindowTitle(QString("Tanuki Module :: tanuki %1").arg(subcmd));
+        dlg.setMinimumWidth(560);
+        auto *vbox = new QVBoxLayout(&dlg);
+
+        auto *tabs = new QTabWidget(&dlg);
+        auto *optPage = new QWidget(tabs);
+        auto *form = new QFormLayout(optPage);
+
+        auto *argEdit = new QLineEdit(optPage);
+        auto *chkOpsec = new QCheckBox("Enable OPSEC endpoint sensor probe (--opsec)", optPage);
+        auto *adEnctypeEdit = new QLineEdit(optPage);
+        auto *adKvnoEdit = new QLineEdit(optPage);
+        auto *chkApply = new QCheckBox("Execute live repair instead of dry-run (--apply)", optPage);
+        auto *chkEnforceAes = new QCheckBox("Strictly enforce AES-128/256 (--enforce-aes)", optPage);
+        auto *chkFast = new QCheckBox("Enable RFC 6113 FAST armoring (--fast)", optPage);
+        auto *armorEdit = new QLineEdit(optPage);
+        auto *chkCtypes = new QCheckBox("Force userspace ctypes libkrb5 (--use-ctypes)", optPage);
+        auto *chkSsl = new QCheckBox("Use LDAPS TLS (--ssl)", optPage);
+        auto *tlsModeCombo = new QComboBox(optPage);
+        tlsModeCombo->addItems({"--secure (Verify System Trust Store)", "--verify-ca (Pin CA Bundle)", "--insecure (Lab Self-Signed Opt-Out)"});
+        auto *verifyCaEdit = new QLineEdit(optPage);
+        auto *nhiModeCombo = new QComboBox(optPage);
+        nhiModeCombo->addItems({"scan (Local Workload Tokens)", "mesh (SPIFFE & Cloud IMDS)", "inspect (Validate Workload JWT)", "exchange (RFC 8693 Token Exchange)"});
+        auto *chkLive = new QCheckBox("Execute live HTTP/HTTPS STS exchange (--live)", optPage);
+        auto *endpointEdit = new QLineEdit(optPage);
+
+        chkOpsec->setVisible(subcmd == "doctor");
+        chkOpsec->setChecked(subcmd == "doctor");
+        adEnctypeEdit->setVisible(subcmd == "doctor");
+        adEnctypeEdit->setPlaceholderText("Optional hex/int e.g. 0x18");
+        adKvnoEdit->setVisible(subcmd == "doctor");
+        adKvnoEdit->setPlaceholderText("Optional AD msDS-KeyVersionNumber e.g. 3");
+        chkApply->setVisible(subcmd == "fix");
+        chkEnforceAes->setVisible(subcmd == "config");
+        chkFast->setVisible(subcmd == "config" || subcmd == "auth");
+        armorEdit->setVisible(subcmd == "config" || subcmd == "auth");
+        armorEdit->setPlaceholderText("Optional armor ccache path (--armor-cache)");
+        chkCtypes->setVisible(subcmd == "auth" || subcmd == "tgs");
+        chkSsl->setVisible(subcmd == "ldap");
+        tlsModeCombo->setVisible(subcmd == "ldap");
+        verifyCaEdit->setVisible(subcmd == "ldap");
+        verifyCaEdit->setPlaceholderText("CA PEM path when --verify-ca is selected");
+        nhiModeCombo->setVisible(subcmd == "nhi");
+        chkLive->setVisible(subcmd == "nhi");
+        endpointEdit->setVisible(subcmd == "nhi");
+        endpointEdit->setPlaceholderText("STS endpoint URL (--endpoint https://sts.corp.local/oauth/token)");
+
+        if (subcmd == "keytab") {
+            argEdit->setText(!m_committedKeytab.isEmpty() ? m_committedKeytab : m_resolvedKeytab);
+        } else if (subcmd == "config") {
+            argEdit->setText("--realm CORP.LOCAL --kdc 192.168.56.106");
+        } else if (subcmd == "triage") {
+            argEdit->setText("SKEW");
+        } else if (subcmd == "auth") {
+            const QString kt = !m_committedKeytab.isEmpty() ? m_committedKeytab : m_resolvedKeytab;
+            argEdit->setText(QString("--keytab %1 --principal host/app@CORP.LOCAL --kdc 192.168.56.106").arg(kt));
+        } else if (subcmd == "tgs") {
+            argEdit->setText("--spn HTTP/web.corp.local --kdc 192.168.56.106");
+        } else if (subcmd == "ldap") {
+            argEdit->setText("--host dc01.corp.local --realm CORP.LOCAL --query all");
+        } else if (subcmd == "blast") {
+            if (!m_committedKeytab.isEmpty()) argEdit->setText("--keytab " + m_committedKeytab);
+            else if (!m_committedCcache.isEmpty()) argEdit->setText("--ccache " + m_committedCcache);
+        }
+
+        form->addRow("Module Arguments:", argEdit);
+        if (subcmd == "doctor") {
+            form->addRow("", chkOpsec);
+            form->addRow("AD Enctypes (--ad-enctypes):", adEnctypeEdit);
+            form->addRow("AD KVNO (--ad-kvno):", adKvnoEdit);
+        } else if (subcmd == "fix") {
+            form->addRow("", chkApply);
+        } else if (subcmd == "config" || subcmd == "auth") {
+            if (subcmd == "config") form->addRow("", chkEnforceAes);
+            form->addRow("", chkFast);
+            form->addRow("Armor CCACHE:", armorEdit);
+            if (subcmd == "auth") form->addRow("", chkCtypes);
+        } else if (subcmd == "tgs") {
+            form->addRow("", chkCtypes);
+        } else if (subcmd == "ldap") {
+            form->addRow("", chkSsl);
+            form->addRow("LDAPS Verification:", tlsModeCombo);
+            form->addRow("CA Bundle (--verify-ca):", verifyCaEdit);
+        } else if (subcmd == "nhi") {
+            form->addRow("NHI Operation:", nhiModeCombo);
+            form->addRow("", chkLive);
+            form->addRow("STS Endpoint:", endpointEdit);
+        }
+
+        auto *prevPage = new QWidget(tabs);
+        auto *prevLay = new QVBoxLayout(prevPage);
+        auto *previewEdit = new QPlainTextEdit(prevPage);
+        previewEdit->setReadOnly(true);
+        prevLay->addWidget(previewEdit);
+
+        auto buildArgsList = [&]() -> QStringList {
+            QStringList args;
+            if (subcmd == "nhi") {
+                const QString modeWord = nhiModeCombo->currentText().section(' ', 0, 0);
+                args << modeWord;
+                if (chkLive->isChecked()) args << "--live";
+                if (!endpointEdit->text().trimmed().isEmpty()) args << "--endpoint" << endpointEdit->text().trimmed();
+            }
+            if (!argEdit->text().trimmed().isEmpty()) {
+                args.append(splitCommandLineArgs(argEdit->text().trimmed()));
+            }
+            if (subcmd == "doctor") {
+                if (chkOpsec->isChecked() && !args.contains("--opsec")) args << "--opsec";
+                if (!adEnctypeEdit->text().trimmed().isEmpty()) args << "--ad-enctypes" << adEnctypeEdit->text().trimmed();
+                if (!adKvnoEdit->text().trimmed().isEmpty()) args << "--ad-kvno" << adKvnoEdit->text().trimmed();
+            } else if (subcmd == "fix") {
+                if (chkApply->isChecked()) args << "--apply";
+            } else if (subcmd == "config" || subcmd == "auth") {
+                if (subcmd == "config" && chkEnforceAes->isChecked()) args << "--enforce-aes";
+                if (chkFast->isChecked()) args << "--fast";
+                if (!armorEdit->text().trimmed().isEmpty()) args << "--armor-cache" << armorEdit->text().trimmed();
+                if (subcmd == "auth" && chkCtypes->isChecked()) args << "--use-ctypes";
+            } else if (subcmd == "tgs" && chkCtypes->isChecked()) {
+                args << "--use-ctypes";
+            } else if (subcmd == "ldap" && chkSsl->isChecked()) {
+                args << "--ssl";
+                if (tlsModeCombo->currentIndex() == 0) args << "--secure";
+                else if (tlsModeCombo->currentIndex() == 1 && !verifyCaEdit->text().trimmed().isEmpty()) {
+                    args << "--verify-ca" << verifyCaEdit->text().trimmed();
+                } else if (tlsModeCombo->currentIndex() == 2) args << "--insecure";
+            }
+            return args;
+        };
+
+        auto updatePreview = [&]() {
+            const QStringList args = buildArgsList();
+            const QString cli = QString("tanuki %1 %2 --json").arg(subcmd, args.join(' ')).simplified();
+            QJsonObject rpc = targetParams();
+            rpc["action"] = "tanuki_exec";
+            rpc["subcommand"] = subcmd;
+            if (!args.isEmpty()) {
+                rpc["args"] = QJsonArray::fromStringList(args);
+            }
+            previewEdit->setPlainText(
+                "[GUI -> CLI Command Preview]\n" + redactConsoleCommand(cli) + "\n\n" +
+                "[mTLS 1.3 RPC Payload Preview]\n" +
+                QString::fromUtf8(QJsonDocument(rpc).toJson(QJsonDocument::Indented)));
+        };
+
+        connect(tabs, &QTabWidget::currentChanged, &dlg, [&](int) { updatePreview(); });
+        connect(argEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        updatePreview();
+
+        tabs->addTab(optPage, "Options");
+        tabs->addTab(prevPage, "Preview & CLI");
+        vbox->addWidget(tabs);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addStretch(1);
+        auto *btnCancel = new QPushButton("Cancel", &dlg);
+        btnCancel->setObjectName("SecondaryBtn");
+        auto *btnRun = new QPushButton("Execute Module", &dlg);
+        btnRun->setObjectName("PrimaryBtn");
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(btnRun, &QPushButton::clicked, &dlg, &QDialog::accept);
+        btnRow->addWidget(btnCancel);
+        btnRow->addWidget(btnRun);
+        vbox->addLayout(btnRow);
+
+        if (dlg.exec() == QDialog::Accepted) {
+            const QStringList args = buildArgsList();
+            if (args.size() == 1 && !args.first().startsWith('-')) {
+                dispatchTanuki(subcmd, args.first());
+            } else {
+                dispatchTanuki(subcmd, QString(), args);
+            }
+        }
+    }
+
+    void openTempestModuleModal(const QString &action) {
+        commitTargetFieldsFromEdits();
+        QDialog dlg(this);
+        dlg.setObjectName("ModuleModal");
+        dlg.setWindowTitle("Tempest Runtime Operative :: " + action);
+        dlg.setMinimumWidth(520);
+        auto *vbox = new QVBoxLayout(&dlg);
+
+        auto *tabs = new QTabWidget(&dlg);
+        auto *optPage = new QWidget(tabs);
+        auto *form = new QFormLayout(optPage);
+
+        auto *pathEdit = new QLineEdit(optPage);
+        auto *auxEdit = new QLineEdit(optPage);
+        auto *warnEdit = new QLineEdit(optPage);
+        auto *chkFlag = new QCheckBox(optPage);
+
+        if (action == "souei_watch") {
+            pathEdit->setText(!m_committedCcache.isEmpty() ? m_committedCcache : (m_resolvedCCache.isEmpty() ? "/etc/krb5.conf" : m_resolvedCCache));
+            auxEdit->setText("1000");
+            form->addRow("Watch Target Path (--watch-file):", pathEdit);
+            form->addRow("Timeout ms (100..10000):", auxEdit);
+        } else if (action == "chronoa_check") {
+            pathEdit->setText(!m_committedCcache.isEmpty() ? m_committedCcache : m_resolvedCCache);
+            auxEdit->setPlaceholderText("Optional KDC Unix epoch (--kdc-time)");
+            warnEdit->setText("300");
+            chkFlag->setText("Execute live TGT renewal via kinit -R (--renew)");
+            form->addRow("CCACHE Path (--ccache):", pathEdit);
+            form->addRow("KDC Time Epoch (--kdc-time):", auxEdit);
+            form->addRow("Warn Window Sec (--warn-window-sec):", warnEdit);
+            form->addRow("", chkFlag);
+        } else if (action == "ranga_purge") {
+            pathEdit->setPlaceholderText("Explicit regular file path to 3-pass NIST wipe & unlink");
+            chkFlag->setText("Also revoke active process session keyring (--revoke-session)");
+            form->addRow("Purge Target File (--purge):", pathEdit);
+            form->addRow("", chkFlag);
+        }
+
+        auto *prevPage = new QWidget(tabs);
+        auto *prevLay = new QVBoxLayout(prevPage);
+        auto *previewEdit = new QPlainTextEdit(prevPage);
+        previewEdit->setReadOnly(true);
+        prevLay->addWidget(previewEdit);
+
+        auto buildPayload = [&](QString &cliOut) -> QJsonObject {
+            QJsonObject p = targetParams();
+            if (action == "souei_watch") {
+                const QString wp = pathEdit->text().trimmed();
+                const int ms = qBound(100, auxEdit->text().trimmed().toInt(), 10000);
+                p["watch_path"] = wp;
+                p["watch_timeout_ms"] = ms;
+                cliOut = QString("souei --watch-file %1 --timeout-ms %2 --json").arg(wp).arg(ms);
+            } else if (action == "chronoa_check") {
+                const QString cp = pathEdit->text().trimmed();
+                if (!cp.isEmpty()) p["ccache_path"] = cp;
+                const qint64 kdcEpoch = auxEdit->text().trimmed().toLongLong();
+                if (kdcEpoch > 0) p["kdc_time_epoch"] = kdcEpoch;
+                const qint64 warnSec = warnEdit->text().trimmed().toLongLong();
+                if (warnSec > 0) p["warn_window_sec"] = warnSec;
+                if (chkFlag->isChecked()) p["renew"] = true;
+                cliOut = QString("chronoa --ccache %1%2 --warn-window-sec %3%4 --once --json")
+                             .arg(cp.isEmpty() ? "<auto>" : cp,
+                                  kdcEpoch > 0 ? QString(" --kdc-time %1").arg(kdcEpoch) : "",
+                                  QString::number(warnSec > 0 ? warnSec : 300),
+                                  chkFlag->isChecked() ? " --renew" : "");
+            } else if (action == "ranga_purge") {
+                const QString pp = pathEdit->text().trimmed();
+                p["purge_path"] = pp;
+                if (chkFlag->isChecked()) p["revoke_session"] = true;
+                cliOut = QString("ranga --purge %1%2 --json").arg(pp, chkFlag->isChecked() ? " --revoke-session" : "");
+            }
+            return p;
+        };
+
+        auto updatePreview = [&]() {
+            QString cli;
+            QJsonObject rpc = buildPayload(cli);
+            rpc["action"] = action;
+            previewEdit->setPlainText(
+                "[GUI -> CLI Command Preview]\n" + cli + "\n\n" +
+                "[mTLS 1.3 RPC Payload Preview]\n" +
+                QString::fromUtf8(QJsonDocument(rpc).toJson(QJsonDocument::Indented)));
+        };
+        connect(tabs, &QTabWidget::currentChanged, &dlg, [&](int) { updatePreview(); });
+        connect(pathEdit, &QLineEdit::textChanged, &dlg, [&](const QString &) { updatePreview(); });
+        updatePreview();
+
+        tabs->addTab(optPage, "Options");
+        tabs->addTab(prevPage, "Preview & CLI");
+        vbox->addWidget(tabs);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addStretch(1);
+        auto *btnCancel = new QPushButton("Cancel", &dlg);
+        btnCancel->setObjectName("SecondaryBtn");
+        auto *btnRun = new QPushButton(action == "ranga_purge" ? "Confirm & Purge" : "Execute Operative", &dlg);
+        btnRun->setObjectName(action == "ranga_purge" ? "DangerBtn" : "PrimaryBtn");
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(btnRun, &QPushButton::clicked, &dlg, &QDialog::accept);
+        btnRow->addWidget(btnCancel);
+        btnRow->addWidget(btnRun);
+        vbox->addLayout(btnRow);
+
+        if (dlg.exec() == QDialog::Accepted) {
+            QString cli;
+            const QJsonObject p = buildPayload(cli);
+            if (action == "ranga_purge") {
+                const QString pp = p.value("purge_path").toString();
+                if (pp.isEmpty()) return;
+                const auto confirm = QMessageBox::warning(
+                    this, "Confirm NIST SP 800-88 File Purge",
+                    QString("Permanently 3-pass overwrite and unlink:\n\n%1").arg(pp),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                if (confirm != QMessageBox::Yes) return;
+            }
+            dispatchFromUi(action, p, cli);
         }
     }
 
@@ -2613,51 +3735,6 @@ private:
         } else {
             dispatchTanuki("purge", val);
         }
-    }
-
-    void promptAndWatchFile() {
-        commitTargetFieldsFromEdits();
-        QString preset = !m_committedCcache.isEmpty() ? m_committedCcache : m_resolvedCCache;
-        if (preset.isEmpty()) {
-            preset = "/etc/krb5.conf";
-        }
-        bool ok = false;
-        const QString path = QInputDialog::getText(
-                                 this, "Souei Inotify Watch",
-                                 "Target file path to monitor for open/access/modify:",
-                                 QLineEdit::Normal, preset, &ok)
-                                 .trimmed();
-        if (!ok || path.isEmpty()) {
-            return;
-        }
-        QJsonObject p = targetParams();
-        p["watch_path"] = path;
-        p["watch_timeout_ms"] = 1000;
-        dispatchFromUi("souei_watch", p, "souei --watch-file " + path);
-    }
-
-    void promptAndPurgeFile() {
-        bool ok = false;
-        const QString path = QInputDialog::getText(
-                                 this, "Ranga NIST SP 800-88 File Purge",
-                                 "Explicit regular file path to 3-pass overwrite and unlink:",
-                                 QLineEdit::Normal, QString(), &ok)
-                                 .trimmed();
-        if (!ok || path.isEmpty()) {
-            return;
-        }
-        const auto confirm = QMessageBox::warning(
-            this,
-            "Confirm NIST SP 800-88 File Purge",
-            QString("Permanently 3-pass overwrite (0x00, 0xFF, random) and unlink:\n\n%1\n\nThis cannot be undone.").arg(path),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (confirm != QMessageBox::Yes) {
-            return;
-        }
-        QJsonObject p;
-        p["purge_path"] = path;
-        dispatchFromUi("ranga_purge", p, "ranga --purge " + path);
     }
 
     QString nowTime() const {
@@ -2704,8 +3781,8 @@ private:
     }
 
     static QString formatTelemetryHtml(const QString &raw,
-                                       const QColor &baseColor = QColor("#f8f8f2"),
-                                       const QColor &badgeColor = QColor("#8be9fd"),
+                                       const QColor &baseColor = QColor("#F3F4F6"),
+                                       const QColor &badgeColor = QColor("#60A5FA"),
                                        bool isAlert = false) {
         const QString baseHex = baseColor.name();
         const QString badgeHex = badgeColor.name();
@@ -2728,20 +3805,20 @@ private:
                 const QString v = tok.mid(eq + 1);
                 QString vColor = baseHex;
                 if (k == "status") {
-                    vColor = draculaStatusColor(v).name();
+                    vColor = cielStatusColor(v).name();
                 } else if (k == "exit" || k == "rc") {
-                    vColor = (v == "0") ? "#50fa7b" : "#ff5555";
+                    vColor = (v == "0") ? "#10B981" : "#EF4444";
                 } else if (k == "principal" || k == "target" || k == "path" ||
                            k == "session_keyring" || k == "keyring_id" || k == "enctype") {
                     if (isAlert) {
-                        vColor = "#ff5555";
+                        vColor = "#EF4444";
                     } else {
-                        vColor = (v == "-" || v == "none") ? "#f1fa8c" : "#8be9fd";
+                        vColor = (v == "-" || v == "none") ? "#F59E0B" : "#60A5FA";
                     }
                 } else if (k == "possessor_only") {
-                    vColor = (v == "true") ? "#50fa7b" : "#f1fa8c";
+                    vColor = (v == "true") ? "#10B981" : "#F59E0B";
                 } else if (k == "removed" || k == "renewed") {
-                    vColor = (v == "true") ? "#50fa7b" : "#9aa5ce";
+                    vColor = (v == "true") ? "#10B981" : "#9CA3AF";
                 }
                 out.append(QString("<span style=\"color:%1\">%2=</span><span style=\"color:%3\">%4</span>")
                                .arg(baseHex, htmlEsc(k), vColor, htmlEsc(v)));
@@ -2755,9 +3832,9 @@ private:
     void appendEventLog(const QString &tag, const QString &tagColor, const QString &bodyHtml, const QString &tsOverride = QString()) {
         const QString ts = tsOverride.isEmpty() ? nowTime() : tsOverride;
         const QString line = QString(
-            "<span style=\"color:#6272a4\">%1</span> "
+            "<span style=\"color:#9CA3AF\">%1</span> "
             "<span style=\"color:%2\">[%3]</span> "
-            "<span style=\"color:#f8f8f2\">%4</span>")
+            "<span style=\"color:#F3F4F6\">%4</span>")
                                  .arg(htmlEsc(ts), tagColor, htmlEsc(tag), bodyHtml);
         appendHtmlLine(m_eventViewer, line);
     }
@@ -2766,35 +3843,35 @@ private:
         const QString procName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
         const QString pidStr = QString::number(QCoreApplication::applicationPid());
         const QString banner = QString(
-            "<span style=\"color:#6272a4\">%1</span> "
-            "<span style=\"color:#f8f8f2\">Operative </span>"
-            "<span style=\"color:#ff5555\">OP-01..06</span> "
-            "<span style=\"color:#f8f8f2\">authenticated as </span>"
-            "<span style=\"color:#bd93f9\">%2\\%3</span> "
-            "<span style=\"color:#f8f8f2\">:: [Internal: </span>"
-            "<span style=\"color:#8be9fd\">%4</span>"
-            "<span style=\"color:#f8f8f2\">] [Process: </span>"
-            "<span style=\"color:#ff5555\">%5\\%6</span>"
-            "<span style=\"color:#f8f8f2\">] [Arch: </span>"
-            "<span style=\"color:#ff79c6\">%7</span>"
-            "<span style=\"color:#f8f8f2\">] [Pivot: </span>"
-            "<span style=\"color:#8be9fd\">Direct</span>"
-            "<span style=\"color:#f8f8f2\">]</span>")
+            "<span style=\"color:#9CA3AF\">%1</span> "
+            "<span style=\"color:#60A5FA; font-weight:bold;\">Ciel Identity Runtime Console</span> "
+            "<span style=\"color:#F3F4F6\">:: connected as </span>"
+            "<span style=\"color:#93C5FD\">%2\\%3</span> "
+            "<span style=\"color:#F3F4F6\">[Endpoint: </span>"
+            "<span style=\"color:#60A5FA\">%4</span>"
+            "<span style=\"color:#F3F4F6\">] [Process: </span>"
+            "<span style=\"color:#F59E0B\">%5\\%6</span>"
+            "<span style=\"color:#F3F4F6\">] [Arch: </span>"
+            "<span style=\"color:#93C5FD\">%7</span>"
+            "<span style=\"color:#F3F4F6\">] [Transport: </span>"
+            "<span style=\"color:#10B981\">mTLS 1.3 %8</span>"
+            "<span style=\"color:#F3F4F6\">]</span>")
                                    .arg(nowTime(), htmlEsc(m_localHost), htmlEsc(m_localUser),
                                         htmlEsc(m_serverAddr),
                                         htmlEsc(procName.isEmpty() ? "ciel-client" : procName),
-                                        htmlEsc(pidStr), htmlEsc(m_localArch));
+                                        htmlEsc(pidStr), htmlEsc(m_localArch), htmlEsc(m_pqcGroup));
         appendHtmlLine(m_operativeConsole, banner);
     }
 
     void appendCommandEcho(const QString &cmd) {
+        const QString safeCmd = redactConsoleCommand(cmd);
         const QString chevron = QString::fromUtf8("\xc2\xbb");
         const QString line = QString(
-            "<br><span style=\"color:#6272a4\">%1 [%2@%3]</span> "
-            "<u style=\"color:#ff79c6\">Ciel</u> "
-            "<span style=\"color:#8be9fd\">%4</span> "
-            "<span style=\"color:#f8f8f2\">%5</span>")
-                                 .arg(nowTime(), htmlEsc(m_localUser), htmlEsc(m_localHost), chevron, htmlEsc(cmd));
+            "<br><span style=\"color:#9CA3AF\">%1 [%2@%3]</span> "
+            "<u style=\"color:#60A5FA\">Ciel</u> "
+            "<span style=\"color:#93C5FD\">%4</span> "
+            "<span style=\"color:#F3F4F6\">%5</span>")
+                                 .arg(nowTime(), htmlEsc(m_localUser), htmlEsc(m_localHost), chevron, htmlEsc(safeCmd));
         appendHtmlLine(m_operativeConsole, line);
     }
 
@@ -2802,7 +3879,7 @@ private:
         QString ts;
         const QString cleanMsg = stripLeadingTimestamp(msg, ts);
         const QString line = QString(
-            "<span style=\"color:#8be9fd\">[*] %1</span>")
+            "<span style=\"color:#60A5FA\">[*] %1</span>")
                                  .arg(htmlEsc(cleanMsg));
         appendHtmlLine(m_operativeConsole, line);
     }
@@ -2811,8 +3888,8 @@ private:
         QString ts;
         const QString cleanMsg = stripLeadingTimestamp(msg, ts);
         const QString line = QString(
-            "<span style=\"color:#50fa7b\">[+]</span> %1")
-                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#f8f8f2"), QColor("#50fa7b"), false));
+            "<span style=\"color:#10B981\">[+]</span> %1")
+                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#F3F4F6"), QColor("#10B981"), false));
         appendHtmlLine(m_operativeConsole, line);
     }
 
@@ -2820,8 +3897,8 @@ private:
         QString ts;
         const QString cleanMsg = stripLeadingTimestamp(msg, ts);
         const QString line = QString(
-            "<span style=\"color:#f1fa8c\">[!]</span> %1")
-                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#f8f8f2"), QColor("#f1fa8c"), false));
+            "<span style=\"color:#F59E0B\">[!]</span> %1")
+                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#F3F4F6"), QColor("#F59E0B"), false));
         appendHtmlLine(m_operativeConsole, line);
     }
 
@@ -2829,8 +3906,8 @@ private:
         QString ts;
         const QString cleanMsg = stripLeadingTimestamp(msg, ts);
         const QString line = QString(
-            "<span style=\"color:#bd93f9\">[^]</span> "
-            "<span style=\"color:#f8f8f2\">%1</span>")
+            "<span style=\"color:#93C5FD\">[^]</span> "
+            "<span style=\"color:#F3F4F6\">%1</span>")
                                  .arg(htmlEsc(cleanMsg));
         appendHtmlLine(m_operativeConsole, line);
     }
@@ -2839,8 +3916,8 @@ private:
         QString ts;
         const QString cleanMsg = stripLeadingTimestamp(msg, ts);
         const QString line = QString(
-            "<span style=\"color:#ff5555\">[!]</span> %1")
-                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#ff5555"), QColor("#ff5555"), true));
+            "<span style=\"color:#EF4444\">[!]</span> %1")
+                                 .arg(formatTelemetryHtml(cleanMsg, QColor("#EF4444"), QColor("#EF4444"), true));
         appendHtmlLine(m_operativeConsole, line);
     }
 
@@ -2855,8 +3932,9 @@ private:
             "  history         [op_id] [limit]  Inspect decrypted audit events &amp; telemetry snapshots\n"
             "  unlock          [passphrase]     Unlock Shuna vault (rate-limited Argon2id)\n"
             "  rotate          [new_pass]       Dual-key online Shuna DEK rotation (batched re-encrypt)\n"
-            "  backup          [out_path]       Export SHUNAS1 encrypted pg_dump archive\n"
+            "  backup          [out_path]       Export SHUNAS1 encrypted pg_dump archive under backups/\n"
             "  token_rotate                     Rotate mTLS-bound 256-bit session auth_token (30s grace)\n"
+            "  session_issue   &lt;fp&gt; [serial]    Issue mTLS-bound session token for secondary operator cert\n"
             "  cert_revoke     &lt;serial&gt; [why]   Revoke mTLS client cert in CRL + DB &amp; drop sockets\n"
             "  souei                            Probe /proc/keys ACLs, session keyring, and real KCM socket\n"
             "  watch           [path] [ms]      Attach Linux inotify access monitor to real file\n"
@@ -2869,8 +3947,8 @@ private:
             "  triage / ladder / nhi / token    KRB5 errors, 5-rung ladder, NHI scan/mesh, JWT check\n"
             "  blast / adcs / pac / shadow      AD blast radius, ESC1-11 scanner, PAC, shadow credentials\n"
             "  kcm / auth / tgs / ldap / skill  SSSD KCM triage, AS-REQ, TGS, LDAP, skill manifest\n"
-            "  audit / graph / table / clear    Print telemetry matrix or switch Sessions / Session Graph\n";
-        appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(tableText));
+            "  audit / graph / table / clear    Print telemetry matrix or switch Operatives / Session Graph\n";
+        appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#F3F4F6; margin:0;\">%1</pre>").arg(tableText));
     }
 
     void appendDetailedAuditTables() {
@@ -2892,7 +3970,7 @@ private:
             const QString auxCombined = QString("%1 | %2 | %3").arg(s.permOrTtl, s.skewOrAux, s.detail);
             const QString statusPadded = s.status.left(20).leftJustified(20, ' ');
             const QString statusColored = QString("<span style=\"color:%1\">%2</span>")
-                                              .arg(draculaStatusColor(s.status).name(), htmlEsc(statusPadded));
+                                              .arg(cielStatusColor(s.status).name(), htmlEsc(statusPadded));
             matrix += QString("  %1  %2  %3  %4  %5  %6\n")
                           .arg(htmlEsc(idCol.leftJustified(6, ' ')),
                                htmlEsc(opCol.leftJustified(9, ' ')),
@@ -2901,11 +3979,12 @@ private:
                                statusColored,
                                htmlEsc(auxCombined));
         }
-        appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(matrix));
+        appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#F3F4F6; margin:0;\">%1</pre>").arg(matrix));
     }
 
     void dispatchFromUi(const QString &action, const QJsonObject &params, const QString &echoLabel) {
-        appendCommandEcho(echoLabel);
+        const QString prefixed = echoLabel.startsWith("[GUI -> CLI]") ? echoLabel : ("[GUI -> CLI] " + echoLabel);
+        appendCommandEcho(prefixed);
         QJsonObject resp;
         executeAction(action, params, resp, false);
     }
@@ -2950,11 +4029,13 @@ private:
             return;
         }
         if (cmd == "graph") {
+            switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(1);
             rebuildSessionGraph();
             return;
         }
         if (cmd == "table") {
+            switchWorkspaceMode(0);
             m_mainViewTabs->setCurrentIndex(0);
             return;
         }
@@ -2974,23 +4055,23 @@ private:
             const QString key = tokens[1].toLower();
             const QString val = (tokens.size() >= 3) ? tokens.mid(2).join(' ') : QString();
             if (key == "clear") {
-                m_ccacheEdit->clear();
-                m_keytabEdit->clear();
-                m_krb5ConfEdit->clear();
-                m_kcmSockEdit->clear();
+                if (m_ccacheEdit) m_ccacheEdit->clear();
+                if (m_keytabEdit) m_keytabEdit->clear();
+                if (m_krb5ConfEdit) m_krb5ConfEdit->clear();
+                if (m_kcmSockEdit) m_kcmSockEdit->clear();
                 commitTargetFieldsFromEdits();
                 saveProfileIfDbConnected();
                 appendTaskDone("Cleared custom target overrides (reverted to host auto-discovery; run 'sync' to refresh)");
                 return;
             }
             if (key == "ccache") {
-                m_ccacheEdit->setText(val);
+                if (m_ccacheEdit) m_ccacheEdit->setText(val);
             } else if (key == "keytab") {
-                m_keytabEdit->setText(val);
+                if (m_keytabEdit) m_keytabEdit->setText(val);
             } else if (key == "krb5conf" || key == "krb5.conf") {
-                m_krb5ConfEdit->setText(val);
+                if (m_krb5ConfEdit) m_krb5ConfEdit->setText(val);
             } else if (key == "kcm") {
-                m_kcmSockEdit->setText(val);
+                if (m_kcmSockEdit) m_kcmSockEdit->setText(val);
             } else {
                 appendTaskAlert("Usage: set <ccache|keytab|krb5conf|kcm|clear> [path]");
                 return;
@@ -3029,7 +4110,7 @@ private:
                                   htmlEsc(st.leftJustified(10, ' ')),
                                   htmlEsc(ls));
             }
-            appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#f8f8f2; margin:0;\">%1</pre>").arg(table));
+            appendHtmlLine(m_operativeConsole, QString("<pre style=\"color:#F3F4F6; margin:0;\">%1</pre>").arg(table));
             return;
         }
         if (cmd == "history") {
@@ -3092,7 +4173,10 @@ private:
             QJsonObject resp;
             if (executeAction("vault_unlock", p, resp, false) && resp.value("ok").toBool(false)) {
                 m_vaultLocked = false;
-                updateListenersTable();
+                m_vaultWiped = false;
+                m_vaultFailedAttempts = 0;
+                m_vaultRetryAfterSec = 0;
+                updateStatusStrip();
                 maybeLoadProfileFromDb();
             }
             return;
@@ -3104,6 +4188,7 @@ private:
             }
             QJsonObject resp;
             (void)executeAction("vault_rotate", p, resp, false);
+            updateStatusStrip();
             return;
         }
         if (cmd == "backup") {
@@ -3123,6 +4208,25 @@ private:
                     m_authToken = newTok;
                     appendTaskDone("Updated active session auth_token in client memory (30s grace overlap)");
                 }
+            }
+            return;
+        }
+        if (cmd == "session_issue") {
+            if (tokens.size() < 2) {
+                appendTaskAlert("Usage: session_issue <client_cert_sha256_fp> [serial_hex]");
+                return;
+            }
+            QJsonObject p;
+            p["cert_fp"] = tokens[1];
+            if (tokens.size() >= 3) {
+                p["serial_hex"] = tokens[2];
+            }
+            QJsonObject resp;
+            if (executeAction("session_issue", p, resp, false) && resp.value("ok").toBool(false)) {
+                const QJsonObject d = resp.value("data").toObject();
+                appendTaskDone(QString("Issued mTLS-bound session token for cert_fp=%1 (expires=%2)")
+                                   .arg(d.value("cert_fp").toString().left(16),
+                                        d.value("token_expires_at").toString()));
             }
             return;
         }
@@ -3291,72 +4395,50 @@ private:
             m_sessionTable->insertRow(targetRow);
         }
 
-        const QStringList hostParts = m_serverAddr.split(':');
-        const QString hostStr = hostParts.value(0, "127.0.0.1");
+        const QString permAuxCombined = (snap.skewOrAux.isEmpty() || snap.skewOrAux == "-")
+                                            ? snap.permOrTtl
+                                            : QString("%1 | %2").arg(snap.permOrTtl, snap.skewOrAux);
 
-        QString userCol = m_localUser;
-        QString realmCol = m_localHost;
-        if (snap.operative == "Chronoa") {
-            const int atIdx = snap.target.indexOf('@');
-            if (atIdx > 0) {
-                userCol = snap.target.left(atIdx);
-                realmCol = snap.target.mid(atIdx + 1);
-            } else {
-                userCol = m_localUser;
-                realmCol = "KERBEROS";
-            }
-        } else if (snap.operative == "Souei" || snap.operative == "Ranga") {
-            QString uidText = m_localUid;
-            if (snap.rawJson.isObject() && snap.rawJson.toObject().contains("uid")) {
-                uidText = QString::number(snap.rawJson.toObject().value("uid").toInt());
-            }
-            userCol = (uidText != "-" && !uidText.isEmpty())
-                          ? QString("%1 (%2)").arg(m_localUser, uidText)
-                          : m_localUser;
-            realmCol = "linux-kernel";
-        } else if (snap.operative == "Tanuki") {
-            userCol = "nhi-engine";
-            realmCol = m_localHost;
-        }
-
+        // 6-column InfinityCurve Operatives matrix:
+        // 0: ID | 1: Operative | 2: Module | 3: Target / Principal | 4: Perm / TTL / Aux | 5: Status
         const QStringList cells = {
             snap.id,
-            hostStr,
-            snap.skewOrAux,
-            userCol,
-            realmCol,
-            snap.module,
             snap.operative,
+            snap.module,
             snap.target,
-            snap.permOrTtl,
+            permAuxCombined,
             snap.status
         };
 
-        const QColor badgeAccent = draculaStatusColor(snap.status);
+        const QColor badgeAccent = cielStatusColor(snap.status);
         const bool isAlert = isAlertSnapshot(snap);
         const bool isWarn = !isAlert && isWarningLogEntry(QString(), snap.status);
-        const QColor col0IconColor = isAlert ? QColor("#ff5555") : (isWarn ? QColor("#f1fa8c") : QColor("#bd93f9"));
-        const QColor col0TextColor = isAlert ? QColor("#ff5555") : QColor("#f8f8f2");
+        const QColor col0IconColor = isAlert ? QColor("#EF4444") : (isWarn ? QColor("#F59E0B") : QColor("#60A5FA"));
+        const QColor col0TextColor = isAlert ? QColor("#EF4444") : QColor("#F3F4F6");
         for (int c = 0; c < cells.size(); ++c) {
             QTableWidgetItem *item = m_sessionTable->item(targetRow, c);
             if (!item) {
                 item = new QTableWidgetItem();
-                item->setTextAlignment(Qt::AlignCenter);
+                item->setTextAlignment((c == 3 || c == 4) ? (Qt::AlignLeft | Qt::AlignVCenter) : Qt::AlignCenter);
                 m_sessionTable->setItem(targetRow, c, item);
             }
             if (item->text() != cells.at(c)) {
                 item->setText(cells.at(c));
-                item->setToolTip(cells.at(c));
+                item->setToolTip(QString("%1 (%2) :: %3\nDetail: %4").arg(snap.id, snap.operative, cells.at(c), snap.detail));
             }
             if (c == 0) {
                 item->setIcon(makeOperativeBadgeIcon(col0IconColor));
                 item->setForeground(col0TextColor);
-            } else if (c == 9) {
+            } else if (c == 5) {
                 item->setForeground(badgeAccent);
             } else {
-                item->setForeground(QColor("#f8f8f2"));
+                item->setForeground(QColor("#F3F4F6"));
             }
         }
+        if (m_filterEdit && !m_filterEdit->text().trimmed().isEmpty()) {
+            applySessionTableFilter(m_filterEdit->text());
+        }
+        updateStatusStrip();
     }
 
     static bool isAlertSnapshot(const OperativeSnapshot &s) {
@@ -3373,32 +4455,26 @@ private:
     }
 
     void updateContextPaneForSnapshot(const OperativeSnapshot &snap) {
-        QTextEdit *pane = m_contextPanes.value(snap.id, nullptr);
-        if (!pane) {
+        if (!m_inspectorSummary) {
             return;
         }
-        QString jsonStr;
-        if (snap.rawJson.isObject()) {
-            jsonStr = QString::fromUtf8(QJsonDocument(snap.rawJson.toObject()).toJson(QJsonDocument::Indented));
+        if (m_inspectedOpId.isEmpty()) {
+            m_inspectedOpId = snap.id;
         }
-        const QString stableHeader = QString("[%1] %2 :: module=%3 | status=%4 (exit=%5)\n"
-                                             "Target   : %6\n"
-                                             "Detail   : %7\n"
-                                             "Perm/TTL : %8 | Aux: %9\n")
-                                         .arg(snap.id, snap.operative, snap.module, snap.status)
-                                         .arg(snap.exitCode)
-                                         .arg(snap.target, snap.detail, snap.permOrTtl, snap.skewOrAux);
-        const QString bodySig = stableHeader + "\n" + jsonStr;
-        if (m_lastContextSig.value(snap.id) == bodySig) {
+        if (m_inspectedOpId != snap.id) {
             return;
         }
-        m_lastContextSig[snap.id] = bodySig;
-
-        QString summary = stableHeader + QString("Updated  : %1\n").arg(nowTime());
-        if (!jsonStr.isEmpty()) {
-            summary += "\n--- Live Telemetry JSON ---\n" + jsonStr;
+        const QString stableBody = buildDotLeaderForSnapshot(snap);
+        if (m_lastContextSig.value(snap.id) == stableBody && m_summarySourceOpId == snap.id) {
+            return;
         }
-        updateEditorPreservingScroll(pane, summary);
+        m_lastContextSig[snap.id] = stableBody;
+        m_summarySourceOpId = snap.id;
+        if (m_inspectorTitleLabel) {
+            m_inspectorTitleLabel->setText(QString("INSPECTOR :: %1 (%2 :: %3)")
+                                               .arg(snap.id, snap.operative, snap.module));
+        }
+        updateEditorPreservingScroll(m_inspectorSummary, stableBody);
     }
 
     QString currentGraphSignature() const {
@@ -3432,7 +4508,7 @@ private:
             "ciel-teamserver",
             QString("[%1]").arg(m_serverAddr),
             "hub",
-            m_teamserverOnline ? QColor("#8be9fd") : QColor("#ff5555"),
+            m_teamserverOnline ? QColor("#60A5FA") : QColor("#EF4444"),
             !m_teamserverOnline && !m_snapshots.isEmpty());
         rootNode->setPos(82.0, 174.0);
         m_graphScene->addItem(rootNode);
@@ -3479,7 +4555,7 @@ private:
                 userLabel = userLabel.left(12);
             }
             const QString line2 = QString("[%1\\%2 :: %3]").arg(scope, userLabel, s.status);
-            const QColor stCol = draculaStatusColor(s.status);
+            const QColor stCol = cielStatusColor(s.status);
             const bool elevated = isAlertSnapshot(s);
             const bool muted = (s.status == "MISSING" || s.status == "NO_CREDENTIALS" || s.status == "REVOKED");
 
@@ -3497,8 +4573,8 @@ private:
             return node;
         };
 
-        // Havoc-style Reingold-Tilford left-to-right tree:
-        // Root firewall hub (far left x~90) <- green callback arrows from Column 1 (x~330) -> purple/red forward arrows to Column 2 (x~590)
+        // Reingold-Tilford left-to-right tree:
+        // Root mTLS shield hub (far left x~90) <- emerald callback arrows from Column 1 (x~330) -> blue/red forward arrows to Column 2 (x~625)
         CielGraphNode *n1 = nullptr;
         CielGraphNode *n2 = nullptr;
         CielGraphNode *n3 = nullptr;
@@ -3510,43 +4586,43 @@ private:
             const OperativeSnapshot &s = m_snapshots.value("OP-01");
             n1 = makeRealMonitor(s, "souei", QPointF(315.0, 52.0));
             const QString edgeLbl = m_resolvedKcmSocket.isEmpty() ? "proc/keys" : "kcm+keys";
-            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#ff5555") : QColor("#50fa7b");
+            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#EF4444") : QColor("#10B981");
             m_graphScene->addItem(new CielGraphEdge(rootNode, n1, edgeCol, edgeLbl, true, 0.30));
         }
         if (m_snapshots.contains("OP-02")) {
             const OperativeSnapshot &s = m_snapshots.value("OP-02");
             n2 = makeRealMonitor(s, "chronoa", QPointF(345.0, 172.0));
             const QString edgeLbl = (s.detail.isEmpty() || s.detail == "-") ? "ccache" : s.detail.section('-', 0, 0);
-            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#ff5555") : QColor("#50fa7b");
+            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#EF4444") : QColor("#10B981");
             m_graphScene->addItem(new CielGraphEdge(rootNode, n2, edgeCol, edgeLbl, true, 0.50));
         }
         if (m_snapshots.contains("OP-06")) {
             const OperativeSnapshot &s = m_snapshots.value("OP-06");
             n6 = makeRealMonitor(s, "tanuki", QPointF(315.0, 294.0));
-            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#ff5555") : QColor("#50fa7b");
+            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#EF4444") : QColor("#10B981");
             m_graphScene->addItem(new CielGraphEdge(rootNode, n6, edgeCol, s.module.isEmpty() ? "nhi-rpc" : s.module, true, 0.52));
         }
 
-        // Column 2 (x~590-650, Y_SEP~115): Derived kernel/filesystem/AD operatives (forward arrows)
+        // Column 2 (x~625-650): Derived kernel/filesystem/AD operatives (forward arrows)
         if (m_snapshots.contains("OP-04")) {
             const OperativeSnapshot &s = m_snapshots.value("OP-04");
             n4 = makeRealMonitor(s, "ranga-iso", QPointF(625.0, 48.0));
             CielGraphNode *src = n1 ? n1 : rootNode;
-            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#ff5555") : QColor("#bd93f9");
+            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#EF4444") : QColor("#3B82F6");
             m_graphScene->addItem(new CielGraphEdge(src, n4, edgeCol, s.module, false, 0.50));
         }
         if (m_snapshots.contains("OP-03")) {
             const OperativeSnapshot &s = m_snapshots.value("OP-03");
             n3 = makeRealMonitor(s, "ranga-shared", QPointF(650.0, 162.0));
             CielGraphNode *src = n1 ? n1 : rootNode;
-            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#ff5555") : QColor("#bd93f9");
+            const QColor edgeCol = isAlertSnapshot(s) ? QColor("#EF4444") : QColor("#3B82F6");
             m_graphScene->addItem(new CielGraphEdge(src, n3, edgeCol, "keyctl", false, 0.34));
         }
         if (m_snapshots.contains("OP-05")) {
             const OperativeSnapshot &s = m_snapshots.value("OP-05");
             n5 = makeRealMonitor(s, "ranga-purge", QPointF(630.0, 294.0));
             CielGraphNode *src = n2 ? n2 : rootNode;
-            const QColor edgeCol = (s.status == "PURGED" || isAlertSnapshot(s)) ? QColor("#ff5555") : QColor("#bd93f9");
+            const QColor edgeCol = (s.status == "PURGED" || isAlertSnapshot(s)) ? QColor("#EF4444") : QColor("#3B82F6");
             m_graphScene->addItem(new CielGraphEdge(src, n5, edgeCol, "nist-800-88", false, 0.78));
         }
 
@@ -3584,80 +4660,6 @@ private:
         if (m_graphZoomBtn) {
             m_graphZoomBtn->setText(QString("%1%").arg(qRound(m_graphView->currentScale() * 100.0)));
         }
-    }
-
-    void updateListenersTable() {
-        if (!m_listenersTable || m_listenersTable->rowCount() < 5) {
-            return;
-        }
-        QString rpcHost = "127.0.0.1";
-        quint16 rpcPort = 40056;
-        parseHostPort(m_serverAddr, rpcHost, rpcPort);
-        const QString rpcScope = (rpcHost == "127.0.0.1" || rpcHost == "localhost" || rpcHost == "::1")
-                                     ? "loopback"
-                                     : "remote-rpc";
-
-        auto setCell = [&](int row, int col, const QString &text, const QColor &colr = QColor("#f8f8f2")) {
-            QTableWidgetItem *it = m_listenersTable->item(row, col);
-            if (!it) {
-                it = new QTableWidgetItem();
-                it->setTextAlignment(Qt::AlignCenter);
-                m_listenersTable->setItem(row, col, it);
-            }
-            if (it->text() != text) {
-                it->setText(text);
-                it->setToolTip(text);
-            }
-            it->setForeground(colr);
-        };
-
-        setCell(0, 1, QString("mTLS 1.3 / %1").arg(m_pqcGroup));
-        setCell(0, 2, m_serverAddr);
-        setCell(0, 3, rpcScope);
-        const QString capText = m_dbConnected
-                                    ? QString("PG16:%1 | kv=%2").arg(m_sslMode).arg(m_shunaKeyVersion)
-                                    : QString("standalone | mTLS");
-        setCell(0, 4, capText);
-        if (m_authFailed) {
-            setCell(0, 5, "UNAUTHORIZED", QColor("#ff5555"));
-        } else if (m_vaultLocked) {
-            setCell(0, 5, "VAULT_LOCKED", QColor("#f1fa8c"));
-        } else {
-            setCell(0, 5, m_teamserverOnline ? "ONLINE" : "OFFLINE",
-                    m_teamserverOnline ? QColor("#50fa7b") : QColor("#ff5555"));
-        }
-
-        setCell(1, 2, m_resolvedKcmSocket.isEmpty() ? "none (passive)" : m_resolvedKcmSocket);
-        setCell(1, 3, "uid=" + m_localUid);
-        setCell(2, 2, m_resolvedCCache.isEmpty() ? "auto ($KRB5CCNAME)" : m_resolvedCCache);
-        setCell(2, 4, m_kinitAvailable ? "kinit -R" : "no-kinit");
-        setCell(4, 2, m_resolvedKrb5Conf.isEmpty() ? "/etc/krb5.conf" : m_resolvedKrb5Conf);
-
-        auto syncOpRow = [&](int tableRow, const QString &opId) {
-            if (m_authFailed) {
-                setCell(tableRow, 5, "UNAUTHORIZED", QColor("#ff5555"));
-                return;
-            }
-            if (!m_teamserverOnline) {
-                setCell(tableRow, 5, "OFFLINE", QColor("#ff5555"));
-                return;
-            }
-            if (!m_snapshots.contains(opId)) {
-                setCell(tableRow, 5, "PENDING", QColor("#ffb86c"));
-                return;
-            }
-            const OperativeSnapshot &s = m_snapshots.value(opId);
-            setCell(tableRow, 5, s.status, draculaStatusColor(s.status));
-        };
-
-        syncOpRow(1, "OP-01");
-        syncOpRow(2, "OP-02");
-        if (m_snapshots.contains("OP-04")) {
-            syncOpRow(3, "OP-04");
-        } else {
-            syncOpRow(3, "OP-03");
-        }
-        syncOpRow(4, "OP-06");
     }
 
     void updateTelemetryEnvironment(const QJsonObject &data) {
@@ -3724,6 +4726,17 @@ private:
         if (data.contains("vault_locked")) {
             m_vaultLocked = data.value("vault_locked").toBool(false);
         }
+        if (data.contains("vault_wiped")) {
+            m_vaultWiped = data.value("vault_wiped").toBool(false);
+        } else if (data.contains("wiped_locked")) {
+            m_vaultWiped = data.value("wiped_locked").toBool(false);
+        }
+        if (data.contains("failed_attempts")) {
+            m_vaultFailedAttempts = data.value("failed_attempts").toInt(0);
+        }
+        if (data.contains("retry_after_sec")) {
+            m_vaultRetryAfterSec = data.value("retry_after_sec").toInt(0);
+        }
         if (data.contains("rotation_in_progress")) {
             m_rotationInProgress = data.value("rotation_in_progress").toBool(false);
         }
@@ -3737,55 +4750,45 @@ private:
             m_hostId = data.value("host_id").toString();
         }
 
-        if (changed) {
-            if (m_sessionBanner) {
-                m_sessionBanner->setText(
-                    QString("[%1/%2] tempest-runtime/%3 %4 (Linux Keyring & Kerberos CCACHE)")
-                        .arg(m_localUser, m_localHost, m_localUid, m_localArch));
-            }
+        if (changed && m_sessionBanner) {
+            m_sessionBanner->setText(
+                QString("[%1@%2] Ciel Identity Runtime (%3 / uid=%4)")
+                    .arg(m_localUser, m_localHost, m_localArch, m_localUid));
         }
-        if (QTextEdit *tsPane = m_contextPanes.value("TEAMSERVER", nullptr)) {
-            const QString vaultState = (m_shunaKeyVersion == 0 && !m_dbConnected)
-                                           ? QString("ephemeral (no vault)")
-                                           : (m_vaultLocked
-                                                  ? QString("VAULT_LOCKED (key_version=%1)").arg(m_shunaKeyVersion)
-                                                  : QString("UNLOCKED (key_version=%1%2)").arg(m_shunaKeyVersion).arg(m_rotationInProgress ? ", rotating" : ""));
-            const QString dbState = m_dbConnected
-                                        ? QString("connected (sslmode=%1)").arg(m_sslMode)
-                                        : QString("standalone (ephemeral)");
-            const QString tsStable = QString(
-                "[TEAMSERVER] ciel-teamserver endpoint : %1\n"
-                "Transport Security: mTLS 1.3 (%2, serial=%3)\n"
-                "Token Expires At  : %4\n"
-                "PostgreSQL FleetDB: %5\n"
-                "Shuna Vault       : %6\n"
-                "Operator / Host   : %7@%8 (uid=%9, arch=%10)\n"
-                "Workspace         : %11\n"
-                "PKI Directory     : %12\n"
-                "Resolved CCACHE   : %13\n"
-                "Resolved Keytab   : %14\n"
-                "Resolved krb5.conf: %15\n"
-                "Resolved KCM Sock : %16\n"
-                "kinit -R Available: %17\n"
-                "Auth Enforced     : true (mTLS cert-bound 256-bit token)\n")
-                                         .arg(m_serverAddr,
-                                              m_pqcGroup,
-                                              m_clientCertSerial.isEmpty() ? "-" : m_clientCertSerial,
-                                              m_tokenExpiresAt.isEmpty() ? "-" : m_tokenExpiresAt,
-                                              dbState,
-                                              vaultState,
-                                              m_localUser, m_localHost, m_localUid, m_localArch,
-                                              m_workDir, m_pkiDir,
-                                              m_resolvedCCache.isEmpty() ? "none" : m_resolvedCCache,
-                                              m_resolvedKeytab.isEmpty() ? "none" : m_resolvedKeytab,
-                                              m_resolvedKrb5Conf.isEmpty() ? "none" : m_resolvedKrb5Conf,
-                                              m_resolvedKcmSocket.isEmpty() ? "none (passive)" : m_resolvedKcmSocket,
-                                              m_kinitAvailable ? "yes" : "no");
-            if (m_lastContextSig.value("TEAMSERVER") != tsStable) {
-                m_lastContextSig["TEAMSERVER"] = tsStable;
-                updateEditorPreservingScroll(tsPane, tsStable + QString("Last Updated      : %1").arg(nowTime()));
-            }
+        if (m_kpiFreshnessLabel) {
+            m_kpiFreshnessLabel->setText("Sync: " + nowTime());
         }
+
+        const QString vaultState = (m_shunaKeyVersion == 0 && !m_dbConnected)
+                                       ? QString("ephemeral (no vault)")
+                                       : (m_vaultLocked
+                                              ? QString("VAULT_LOCKED (key_version=%1)").arg(m_shunaKeyVersion)
+                                              : QString("UNLOCKED (key_version=%1%2)").arg(m_shunaKeyVersion).arg(m_rotationInProgress ? ", rotating" : ""));
+        const QString dbState = m_dbConnected
+                                    ? QString("connected (sslmode=%1)").arg(m_sslMode)
+                                    : QString("standalone (ephemeral)");
+
+        QStringList tsLines = {
+            formatDotLeader("Teamserver Endpoint", m_serverAddr),
+            formatDotLeader("Transport Security", QString("mTLS 1.3 (%1)").arg(m_pqcGroup)),
+            formatDotLeader("Client Cert Serial", m_clientCertSerial.isEmpty() ? "-" : m_clientCertSerial),
+            formatDotLeader("Token Expires At", m_tokenExpiresAt.isEmpty() ? "-" : m_tokenExpiresAt),
+            formatDotLeader("PostgreSQL FleetDB", dbState),
+            formatDotLeader("Shuna Vault State", vaultState),
+            formatDotLeader("Operator Identity", QString("%1@%2 (uid=%3, %4)").arg(m_localUser, m_localHost, m_localUid, m_localArch)),
+            formatDotLeader("Workspace Dir", m_workDir),
+            formatDotLeader("PKI Directory", m_pkiDir),
+            formatDotLeader("Resolved CCACHE", m_resolvedCCache.isEmpty() ? "none" : m_resolvedCCache),
+            formatDotLeader("Resolved Keytab", m_resolvedKeytab.isEmpty() ? "none" : m_resolvedKeytab),
+            formatDotLeader("Resolved krb5.conf", m_resolvedKrb5Conf.isEmpty() ? "none" : m_resolvedKrb5Conf),
+            formatDotLeader("Resolved KCM Socket", m_resolvedKcmSocket.isEmpty() ? "none (passive)" : m_resolvedKcmSocket),
+            formatDotLeader("kinit -R Renewal", m_kinitAvailable ? "available" : "unavailable")
+        };
+        m_teamserverSummaryText = tsLines.join('\n');
+        if (m_inspectedOpId == "TEAMSERVER" && m_inspectorSummary) {
+            updateEditorPreservingScroll(m_inspectorSummary, m_teamserverSummaryText);
+        }
+        updateStatusStrip();
     }
 
     bool probeTcpNonBlocking(const QString &host, quint16 port, int timeoutMs) {
@@ -3814,7 +4817,7 @@ private:
         QString host;
         quint16 port = 0;
         if (!parseHostPort(m_serverAddr, host, port)) {
-            appendEventLog("!", "#ff5555", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
+            appendEventLog("!", "#EF4444", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
             return false;
         }
 
@@ -3843,7 +4846,7 @@ private:
             }
         }
         if (binPath.isEmpty()) {
-            appendEventLog("!", "#ff5555", "Unable to locate ciel-teamserver binary");
+            appendEventLog("!", "#EF4444", "Unable to locate ciel-teamserver binary");
             return false;
         }
 
@@ -3868,7 +4871,7 @@ private:
             }
             m_managedServer->start(binPath, srvArgs);
             if (!m_managedServer->waitForStarted(2000)) {
-                appendEventLog("!", "#ff5555", "Failed launching ciel-teamserver: " + htmlEsc(binPath));
+                appendEventLog("!", "#EF4444", "Failed launching ciel-teamserver: " + htmlEsc(binPath));
                 return false;
             }
         }
@@ -3877,21 +4880,21 @@ private:
             if (probeTcpNonBlocking(host, port, 150)) {
                 if (!m_loggedManagedBoot) {
                     m_loggedManagedBoot = true;
-                    appendEventLog("+", "#50fa7b",
-                        QString("Initialized <span style=\"color:#50fa7b\">ciel-teamserver</span> :: <span style=\"color:#8be9fd\">%1</span> (Tempest + Tanuki)")
+                    appendEventLog("+", "#10B981",
+                        QString("Initialized <span style=\"color:#10B981\">ciel-teamserver</span> :: <span style=\"color:#60A5FA\">%1</span> (Tempest + Tanuki)")
                             .arg(htmlEsc(m_serverAddr)));
                 }
                 return true;
             }
             if (m_managedServer->state() == QProcess::NotRunning) {
-                appendEventLog("!", "#ff5555", "Managed ciel-teamserver exited before listening");
+                appendEventLog("!", "#EF4444", "Managed ciel-teamserver exited before listening");
                 return false;
             }
             QEventLoop pauseLoop;
             QTimer::singleShot(100, &pauseLoop, &QEventLoop::quit);
             pauseLoop.exec();
         }
-        appendEventLog("!", "#ff5555", "Timed out waiting for managed ciel-teamserver on " + htmlEsc(m_serverAddr));
+        appendEventLog("!", "#EF4444", "Timed out waiting for managed ciel-teamserver on " + htmlEsc(m_serverAddr));
         return false;
     }
 
@@ -4005,24 +5008,44 @@ private:
             return false;
         }
         BoolScopeGuard inFlightGuard(m_actionInFlight);
+        QPointer<CielWindow> safeThis(this);
+        if (m_statusRpcLabel) {
+            m_statusRpcLabel->setText("RPC: " + action);
+            m_statusRpcLabel->setStyleSheet("color: #60A5FA; font-weight: bold;");
+        }
+        struct RpcIdleReset {
+            QPointer<CielWindow> win;
+            ~RpcIdleReset() {
+                if (win && win->m_statusRpcLabel) {
+                    win->m_statusRpcLabel->setText("RPC: IDLE");
+                    win->m_statusRpcLabel->setStyleSheet("color: #9CA3AF;");
+                }
+            }
+        } rpcReset{safeThis};
 
         QString host;
         quint16 port = 0;
         if (!parseHostPort(m_serverAddr, host, port)) {
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
             if (!background) {
-                appendEventLog("!", "#ff5555", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
+                appendEventLog("!", "#EF4444", "Invalid teamserver address: " + htmlEsc(m_serverAddr));
             }
             return false;
         }
 
         if (!ensureTeamserverRunning()) {
+            if (!safeThis) {
+                return false;
+            }
             if (m_teamserverOnline || !background) {
-                appendEventLog("!", "#ff5555", "Teamserver unreachable at " + htmlEsc(m_serverAddr));
+                appendEventLog("!", "#EF4444", "Teamserver unreachable at " + htmlEsc(m_serverAddr));
             }
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
+            return false;
+        }
+        if (!safeThis) {
             return false;
         }
 
@@ -4034,9 +5057,9 @@ private:
         QString sslCfgErr;
         if (!buildSslConfiguration(sslCfg, sslCfgErr)) {
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
             if (!background) {
-                appendEventLog("!", "#ff5555", "mTLS configuration failed (fail-closed): " + htmlEsc(sslCfgErr));
+                appendEventLog("!", "#EF4444", "mTLS configuration failed (fail-closed): " + htmlEsc(sslCfgErr));
                 appendTaskAlert("mTLS config error: " + sslCfgErr);
             }
             return false;
@@ -4114,13 +5137,16 @@ private:
         if (sock.state() != QAbstractSocket::UnconnectedState) {
             sock.abort();
         }
+        if (!safeThis) {
+            return false;
+        }
 
         if (timedOut) {
             if (m_teamserverOnline || !background) {
-                appendEventLog("!", "#ff5555", "Timeout waiting for teamserver mTLS action " + htmlEsc(action));
+                appendEventLog("!", "#EF4444", "Timeout waiting for teamserver mTLS action " + htmlEsc(action));
             }
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
             return false;
         }
         if (writeErr || !gotLine) {
@@ -4128,10 +5154,10 @@ private:
                                     ? ("mTLS verification failed: " + tlsErrList.join("; "))
                                     : (sockErr.isEmpty() ? ("Failed mTLS RPC for action " + action) : sockErr);
             if (m_teamserverOnline || !background) {
-                appendEventLog("!", "#ff5555", htmlEsc(msg));
+                appendEventLog("!", "#EF4444", htmlEsc(msg));
             }
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
             return false;
         }
 
@@ -4140,8 +5166,8 @@ private:
         const QJsonDocument doc = QJsonDocument::fromJson(rx.left(nl).trimmed(), &parseErr);
         if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
             m_teamserverOnline = false;
-            updateListenersTable();
-            appendEventLog("!", "#ff5555", "JSON parse failure: " + htmlEsc(parseErr.errorString()));
+            updateStatusStrip();
+            appendEventLog("!", "#EF4444", "JSON parse failure: " + htmlEsc(parseErr.errorString()));
             return false;
         }
 
@@ -4151,13 +5177,13 @@ private:
             const bool firstAuthFail = !m_authFailed;
             m_authFailed = true;
             m_teamserverOnline = false;
-            updateListenersTable();
+            updateStatusStrip();
             if (m_actPoll && m_actPoll->isChecked()) {
                 m_actPoll->setChecked(false);
             }
             const QString errMsg = respOut.value("error").toString("Unauthorized RPC token");
             if (firstAuthFail || !background) {
-                appendEventLog("!", "#ff5555", "Teamserver auth failed: " + htmlEsc(errMsg));
+                appendEventLog("!", "#EF4444", "Teamserver auth failed: " + htmlEsc(errMsg));
                 if (!background) {
                     appendTaskAlert("Teamserver rejected auth_token: " + errMsg);
                 }
@@ -4170,10 +5196,10 @@ private:
             m_vaultLocked = true;
             m_teamserverOnline = true;
             updateTelemetryEnvironment(respOut.value("data").toObject());
-            updateListenersTable();
+            updateStatusStrip();
             const QString errMsg = respOut.value("error").toString("Shuna vault is locked");
             if (!background) {
-                appendEventLog("WARN", "#f1fa8c", "Shuna vault locked: " + htmlEsc(errMsg));
+                appendEventLog("WARN", "#F59E0B", "Shuna vault locked: " + htmlEsc(errMsg));
                 appendTaskWarn("Shuna vault is locked (" + errMsg + "). Run 'unlock <passphrase>' in Operative Console.");
             }
             return false;
@@ -4182,7 +5208,7 @@ private:
         const bool wasOffline = !m_teamserverOnline;
         m_teamserverOnline = true;
         if (background && wasOffline && m_hasSyncedOnce) {
-            appendEventLog("+", "#50fa7b", "Teamserver connection restored on " + htmlEsc(m_serverAddr));
+            appendEventLog("+", "#10B981", "Teamserver connection restored on " + htmlEsc(m_serverAddr));
         }
         m_hasSyncedOnce = true;
 
@@ -4263,37 +5289,37 @@ private:
             QString logTs;
             const QString cleanLine = stripLeadingTimestamp(rawLine, logTs);
             auto buildEventBody = [&](const QColor &opCol, bool alertFlag) -> QString {
-                const QString body = formatTelemetryHtml(cleanLine, QColor("#f8f8f2"), opCol, alertFlag);
+                const QString body = formatTelemetryHtml(cleanLine, QColor("#F3F4F6"), opCol, alertFlag);
                 if (rowId.isEmpty()) {
                     return body;
                 }
-                return QString("<span style=\"color:%1\">%2</span> <span style=\"color:#f8f8f2\">::</span> %3")
+                return QString("<span style=\"color:%1\">%2</span> <span style=\"color:#F3F4F6\">::</span> %3")
                     .arg(opCol.name(), htmlEsc(rowId), body);
             };
             if (isAlertLogEntry(rawLine, rowStatus, rowExitCode)) {
                 if (emitToEventViewer) {
-                    appendEventLog("!", "#ff5555", buildEventBody(QColor("#ff5555"), true), logTs);
+                    appendEventLog("!", "#EF4444", buildEventBody(QColor("#EF4444"), true), logTs);
                 }
                 if (!background) {
                     appendTaskAlert(cleanLine);
                 }
             } else if (isWarningLogEntry(rawLine, rowStatus)) {
                 if (emitToEventViewer) {
-                    appendEventLog("WARN", "#f1fa8c", buildEventBody(QColor("#f1fa8c"), false), logTs);
+                    appendEventLog("WARN", "#F59E0B", buildEventBody(QColor("#F59E0B"), false), logTs);
                 }
                 if (!background) {
                     appendTaskWarn(cleanLine);
                 }
             } else if (rowExitCode == 0) {
                 if (emitToEventViewer) {
-                    appendEventLog("+", "#50fa7b", buildEventBody(QColor("#50fa7b"), false), logTs);
+                    appendEventLog("+", "#10B981", buildEventBody(QColor("#10B981"), false), logTs);
                 }
                 if (!background) {
                     appendTaskDone(cleanLine);
                 }
             } else {
                 if (emitToEventViewer) {
-                    appendEventLog("*", "#8be9fd", buildEventBody(QColor("#8be9fd"), false), logTs);
+                    appendEventLog("*", "#60A5FA", buildEventBody(QColor("#60A5FA"), false), logTs);
                 }
                 if (!background) {
                     appendTaskInfo(cleanLine);
@@ -4301,7 +5327,7 @@ private:
             }
         }
 
-        updateListenersTable();
+        updateStatusStrip();
 
         // Preserve user's scroll position and active action payload in Raw JSON during background polls
         if (!background) {
@@ -4330,7 +5356,7 @@ private:
             updateEditorPreservingScroll(m_rawTelemetry, jsonText);
         }
 
-        if (m_mainViewTabs->currentIndex() == 1) {
+        if (m_mainViewTabs && m_mainViewTabs->currentIndex() == 1) {
             const QString sig = currentGraphSignature();
             if (sig != m_lastGraphSig) {
                 rebuildSessionGraph();
@@ -4366,6 +5392,9 @@ private:
     int m_shunaKeyVersion = 0;
     bool m_dbConnected = false;
     bool m_vaultLocked = false;
+    bool m_vaultWiped = false;
+    int m_vaultFailedAttempts = 0;
+    int m_vaultRetryAfterSec = 0;
     bool m_rotationInProgress = false;
     bool m_profileLoadedFromDb = false;
     bool m_kinitAvailable = false;
@@ -4376,17 +5405,28 @@ private:
     bool m_rawShowingExplicitAction = false;
     bool m_graphUserZoomed = false;
     bool m_initialSplitApplied = false;
-    int m_op01TabIdx = 1;
-    int m_consoleTabIdx = 3;
-    int m_listenersTabIdx = 8;
+    int m_consoleTabIdx = 0;
+    int m_eventTabIdx = 1;
     QString m_lastGraphSig;
     QString m_rawSourceOpId;
+    QString m_inspectedOpId;
+    QString m_summarySourceOpId;
+    QString m_teamserverSummaryText;
+
+    QStackedWidget *m_workspaceStack = nullptr;
+    QList<QPushButton *> m_railBtns;
+    QLabel *m_kpiTransportBadge = nullptr;
+    QLabel *m_kpiVaultBadge = nullptr;
+    QLabel *m_kpiOpsBadge = nullptr;
+    QLabel *m_kpiFreshnessLabel = nullptr;
+    QWidget *m_vaultBanner = nullptr;
+    QLabel *m_vaultBannerLabel = nullptr;
 
     QSplitter *m_topBotSplitter = nullptr;
     QSplitter *m_topSplit = nullptr;
     QTabWidget *m_mainViewTabs = nullptr;
     QTableWidget *m_sessionTable = nullptr;
-    QTableWidget *m_listenersTable = nullptr;
+    QLineEdit *m_filterEdit = nullptr;
     CielGraphView *m_graphView = nullptr;
     QGraphicsScene *m_graphScene = nullptr;
     QPushButton *m_graphZoomOutBtn = nullptr;
@@ -4394,14 +5434,31 @@ private:
     QPushButton *m_graphZoomInBtn = nullptr;
     QPushButton *m_graphFitBtn = nullptr;
 
+    QWidget *m_inspectorDrawer = nullptr;
+    QLabel *m_inspectorTitleLabel = nullptr;
     QTabWidget *m_smallTabs = nullptr;
-    QTextEdit *m_eventViewer = nullptr;
+    QTextEdit *m_inspectorSummary = nullptr;
     QPlainTextEdit *m_rawTelemetry = nullptr;
 
+    QTableWidget *m_hostsTable = nullptr;
+    QTableWidget *m_historyTable = nullptr;
+    QTableWidget *m_listenersTable = nullptr;
+    QComboBox *m_historyFilterCombo = nullptr;
+    QLabel *m_vaultDetailLabel = nullptr;
+    QLabel *m_pkiDetailLabel = nullptr;
+
     QTabWidget *m_bottomTabs = nullptr;
+    QTextEdit *m_eventViewer = nullptr;
     QTextEdit *m_operativeConsole = nullptr;
     QLabel *m_sessionBanner = nullptr;
     QLineEdit *m_operativeInput = nullptr;
+
+    QLabel *m_statusTransportLabel = nullptr;
+    QLabel *m_statusCertLabel = nullptr;
+    QLabel *m_statusDbLabel = nullptr;
+    QLabel *m_statusVaultLabel = nullptr;
+    QLabel *m_statusPollLabel = nullptr;
+    QLabel *m_statusRpcLabel = nullptr;
 
     QLineEdit *m_ccacheEdit = nullptr;
     QLineEdit *m_keytabEdit = nullptr;
@@ -4415,7 +5472,6 @@ private:
     QMap<QString, OperativeSnapshot> m_snapshots;
     QMap<QString, QString> m_lastEventState;
     QMap<QString, QString> m_lastContextSig;
-    QMap<QString, QTextEdit *> m_contextPanes;
 };
 
 int main(int argc, char **argv) {

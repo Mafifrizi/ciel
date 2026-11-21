@@ -97,19 +97,19 @@ If CIEL_VAULT_PASSPHRASE is omitted at teamserver startup, the teamserver starts
 
 ## 4. Operator Workflow Highlights
 
-- **Configure & Persist Target Paths**: Set CCACHE, Keytab, krb5.conf, or KCM Socket in Listeners -> Field Target Paths (or set [key] [path] in Operative Console). When connected to PostgreSQL, paths auto-save encrypted via profile_save and auto-reload on future sessions via profile_get.
-- **Inspect Fleet History & Hosts**: Run hosts and history [OP-01..OP-06] [limit] in Operative Console to decrypt fleet metadata and audit history while verifying row-bound AAD.
+- **Configure & Persist Target Paths**: Set CCACHE, Keytab, krb5.conf, or KCM Socket in Targets (CFG) -> Field Target Paths (or set [key] [path] in Operative Console). When connected to PostgreSQL, paths auto-save encrypted via profile_save and auto-reload on future sessions via profile_get.
+- **Inspect Fleet History & Hosts**: Use the Fleet & History (FLT) workspace mode or run hosts and history [OP-01..OP-06] [limit] in Operative Console to decrypt fleet metadata and audit history while verifying row-bound AAD.
 - **Online Key Rotation & Encrypted Backups**:
 
 ```text
 rotate
-backup /tmp/ciel-fleet.shunas1
+backup fleet.shunas1
 ```
 
-Verify or restore an encrypted backup offline with shuna:
+Backups are confined under {work_dir}/backups (symlink and path-traversal protected). Verify or restore an encrypted backup offline with shuna:
 
 ```bash
-./bin/shuna unseal --stream --key "${XDG_RUNTIME_DIR:-$HOME/.cache}/ciel_workspace/vault" --aad "ciel:pg_dump:v1" --in /tmp/ciel-fleet.shunas1 --out /tmp/ciel-fleet.sql
+./bin/shuna unseal --stream --key "${XDG_RUNTIME_DIR:-$HOME/.cache}/ciel_workspace/vault" --aad "ciel:pg_dump:v1" --in "${XDG_RUNTIME_DIR:-$HOME/.cache}/ciel_workspace/backups/fleet.shunas1" --out /tmp/ciel-fleet.sql
 ```
 
 ## Headless Self-Test Mode

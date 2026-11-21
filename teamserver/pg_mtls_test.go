@@ -466,8 +466,6 @@ func TestRealPostgresEncryptedFleetRotationLockoutAndBackup(t *testing.T) {
 	st.Close()
 
 	// Test persisted brute-force lockout across teamserver restart (NewStorage without passphrase -> 5 wrong unlocks)
-	// Override vault Sleep hook? Since NewStorage uses real time.Sleep (1+2+4+8 = 15s), test 5 failures cleanly
-	// by accelerating via direct Vault Options or testing the 5-failure sequence directly on NewStorage!
 	stLocked, err := NewStorage(ctx, pg.dsn, pkiDir, vaultDir, nil, false, false, true)
 	if err != nil {
 		t.Fatalf("reopen locked storage: %v", err)
@@ -476,7 +474,9 @@ func TestRealPostgresEncryptedFleetRotationLockoutAndBackup(t *testing.T) {
 		t.Fatal("expected reopened storage without passphrase to be locked")
 	}
 	for i := 0; i < 5; i++ {
-		err = stLocked.UnlockVault(ctx, []byte("wrong-pass"))
+		stepCtx, stepCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = stLocked.UnlockVault(stepCtx, []byte("wrong-pass"))
+		stepCancel()
 		if err == nil {
 			t.Fatalf("expected wrong passphrase attempt %d to fail", i+1)
 		}
@@ -487,11 +487,14 @@ func TestRealPostgresEncryptedFleetRotationLockoutAndBackup(t *testing.T) {
 	stLocked.Close()
 
 	// Restart storage again -> lockout MUST persist in PostgreSQL vault_lockout and reject valid passphrase!
-	stRestarted, err := NewStorage(ctx, pg.dsn, pkiDir, vaultDir, nil, false, false, true)
+	stRestarted, err := NewStorage(context.Background(), pg.dsn, pkiDir, vaultDir, nil, false, false, true)
 	if err != nil {
 		t.Fatalf("reopen after lockout: %v", err)
 	}
-	if err := stRestarted.UnlockVault(ctx, []byte("rotated-pass-2")); !errors.Is(err, vault.ErrVaultLocked) {
+	unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err = stRestarted.UnlockVault(unlockCtx, []byte("rotated-pass-2"))
+	unlockCancel()
+	if !errors.Is(err, vault.ErrVaultLocked) {
 		t.Fatalf("expected lockout to survive restart and block valid passphrase, got %v", err)
 	}
 	if ls := stRestarted.VaultLockoutStatus(); ls.FailedAttempts != 5 || !ls.WipedLocked {
@@ -509,7 +512,9 @@ func TestRealPostgresEncryptedFleetRotationLockoutAndBackup(t *testing.T) {
 	}
 	stRestarted.Close()
 
-	stRecovered, err := NewStorage(ctx, pg.dsn, pkiDir, vaultDir, []byte("recovered-pass-3"), false, false, true)
+	recCtx, recCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	stRecovered, err := NewStorage(recCtx, pg.dsn, pkiDir, vaultDir, []byte("recovered-pass-3"), false, false, true)
+	recCancel()
 	if err != nil || stRecovered.VaultLocked() {
 		t.Fatalf("expected storage unlockable after recovery reset: locked=%v err=%v", stRecovered != nil && stRecovered.VaultLocked(), err)
 	}
@@ -646,6 +651,16 @@ func TestMTLS13PQCAuthBindingAndCertRevocation(t *testing.T) {
 	op2Ping := call(conn2, Request{AuthToken: op2Token, Action: "ping"})
 	if !op2Ping.OK {
 		t.Fatalf("operator2 ping with bound token failed: %+v", op2Ping)
+	}
+
+	// Non-bootstrap operator2 must NOT be allowed to call session_issue
+	unauthIssue := call(conn2, Request{
+		AuthToken: op2Token,
+		Action:    "session_issue",
+		CertFP:    strings.Repeat("a", 64),
+	})
+	if unauthIssue.OK || unauthIssue.Status != "UNAUTHORIZED" || unauthIssue.ExitCode != 1 {
+		t.Fatalf("expected non-bootstrap operator2 session_issue to fail with UNAUTHORIZED, got %+v", unauthIssue)
 	}
 
 	// 4. token_rotate issues new token while keeping old token valid during 30s grace
