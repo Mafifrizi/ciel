@@ -387,6 +387,20 @@ QString applyCielStylesheet() {
             color: #E6E8EE;
             spacing: 6px;
         }
+        QCheckBox::indicator {
+            width: 14px;
+            height: 14px;
+            background-color: #17181D;
+            border: 1px solid #3A3F4B;
+            border-radius: 3px;
+        }
+        QCheckBox::indicator:hover {
+            border-color: #5B8DEF;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #2E5AAC;
+            border-color: #5B8DEF;
+        }
         QCheckBox:focus {
             color: #FFFFFF;
         }
@@ -1439,11 +1453,14 @@ private:
 
         p->setPen(Qt::NoPen);
         if (m_roleTag == "chronoa") {
+            p->setPen(QPen(QColor("#E6E8EE"), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p->setBrush(Qt::NoBrush);
+            p->drawEllipse(QPointF(0.0, -12.5), 11.0, 11.0);
+            p->drawLine(QPointF(0.0, -12.5), QPointF(0.0, -19.5));
+            p->drawLine(QPointF(0.0, -12.5), QPointF(5.5, -9.5));
+            p->setPen(Qt::NoPen);
             p->setBrush(QColor("#E6E8EE"));
-            p->drawRect(QRectF(-10.0, -22.0, 9.0, 9.0));
-            p->drawRect(QRectF(1.0, -22.0, 9.0, 9.0));
-            p->drawRect(QRectF(-10.0, -11.0, 9.0, 9.0));
-            p->drawRect(QRectF(1.0, -11.0, 9.0, 9.0));
+            p->drawEllipse(QPointF(0.0, -12.5), 1.6, 1.6);
         } else if (m_roleTag == "souei") {
             p->setPen(QPen(QColor("#E6E8EE"), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p->drawLine(QPointF(-14.0, -18.0), QPointF(-7.0, -12.5));
@@ -1893,7 +1910,11 @@ public:
     int runSelfTest(const QString &screenshotPath,
                     const QString &graphScreenshotPath,
                     const QString &altScreenshotPath = QString(),
-                    const QString &consoleScreenshotPath = QString()) {
+                    const QString &consoleScreenshotPath = QString(),
+                    const QString &vaultScreenshotPath = QString(),
+                    const QString &targetsScreenshotPath = QString(),
+                    const QString &fleetScreenshotPath = QString(),
+                    const QString &modalScreenshotPath = QString()) {
         auto fail = [this](const QString &msg) -> int {
             fprintf(stderr, "SELF-TEST FAIL: %s\n", msg.toUtf8().constData());
             appendEventLog("!", "#EF4444", "SELF-TEST FAIL: " + htmlEsc(msg));
@@ -2339,6 +2360,47 @@ public:
             const QPixmap graphShot = grab();
             if (graphShot.isNull() || !graphShot.save(graphScreenshotPath, "PNG")) {
                 return fail("Failed saving session graph screenshot");
+            }
+        }
+
+        if (!fleetScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(2);
+            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const QPixmap fleetShot = grab();
+            if (fleetShot.isNull() || !fleetShot.save(fleetScreenshotPath, "PNG")) {
+                return fail("Failed saving fleet screenshot");
+            }
+        }
+
+        if (!vaultScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(3);
+            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const QPixmap vaultShot = grab();
+            if (vaultShot.isNull() || !vaultShot.save(vaultScreenshotPath, "PNG")) {
+                return fail("Failed saving vault screenshot");
+            }
+        }
+
+        if (!targetsScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(4);
+            m_bottomTabs->setCurrentIndex(m_consoleTabIdx);
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const QPixmap targetsShot = grab();
+            if (targetsShot.isNull() || !targetsShot.save(targetsScreenshotPath, "PNG")) {
+                return fail("Failed saving targets screenshot");
+            }
+        }
+
+        if (!modalScreenshotPath.isEmpty()) {
+            switchWorkspaceMode(1);
+            QApplication::processEvents();
+            if (!openTanukiModuleModal("doctor", modalScreenshotPath)) {
+                return fail("Failed saving module modal screenshot");
             }
         }
 
@@ -3234,20 +3296,37 @@ private:
             lines << QString();
             lines << "--- Structured Telemetry Fields ---";
             const QJsonObject obj = snap.rawJson.toObject();
-            for (auto it = obj.begin(); it != obj.end(); ++it) {
-                QString vStr;
-                if (it.value().isString()) {
-                    vStr = it.value().toString();
-                } else if (it.value().isBool()) {
-                    vStr = it.value().toBool() ? "true" : "false";
-                } else if (it.value().isDouble()) {
-                    vStr = QString::number(it.value().toVariant().toLongLong());
-                } else if (it.value().isArray()) {
-                    vStr = QString("[%1 item(s)]").arg(it.value().toArray().size());
-                } else if (it.value().isObject()) {
-                    vStr = QString::fromUtf8(QJsonDocument(it.value().toObject()).toJson(QJsonDocument::Compact));
+            auto formatScalar = [](const QJsonValue &val) -> QString {
+                if (val.isString()) {
+                    return val.toString();
                 }
-                lines << formatDotLeader(it.key(), vStr);
+                if (val.isBool()) {
+                    return val.toBool() ? "true" : "false";
+                }
+                if (val.isDouble()) {
+                    return QString::number(val.toVariant().toLongLong());
+                }
+                if (val.isArray()) {
+                    return QString("[%1 item(s)]").arg(val.toArray().size());
+                }
+                return QString("-");
+            };
+            for (auto it = obj.begin(); it != obj.end(); ++it) {
+                if (it.value().isObject()) {
+                    const QJsonObject sub = it.value().toObject();
+                    if (sub.isEmpty()) {
+                        lines << formatDotLeader(it.key(), "{}");
+                    } else {
+                        for (auto sit = sub.begin(); sit != sub.end(); ++sit) {
+                            if (sit.value().isString() && sit.value().toString().isEmpty()) {
+                                continue;
+                            }
+                            lines << formatDotLeader(it.key() + "." + sit.key(), formatScalar(sit.value()));
+                        }
+                    }
+                    continue;
+                }
+                lines << formatDotLeader(it.key(), formatScalar(it.value()));
             }
         }
         return lines.join('\n');
@@ -4295,12 +4374,12 @@ private:
         handleOperativeCommand(reason.isEmpty() ? ("cert_revoke " + serial) : QString("cert_revoke %1 %2").arg(serial, reason));
     }
 
-    void openTanukiModuleModal(const QString &subcmd) {
+    bool openTanukiModuleModal(const QString &subcmd, const QString &capturePath = QString()) {
         commitTargetFieldsFromEdits();
         QDialog dlg(this);
         dlg.setObjectName("ModuleModal");
         dlg.setWindowTitle(QString("Tanuki Module :: tanuki %1").arg(subcmd));
-        dlg.setMinimumWidth(560);
+        dlg.setMinimumWidth(620);
         auto *vbox = new QVBoxLayout(&dlg);
 
         auto *tabs = new QTabWidget(&dlg);
@@ -4482,7 +4561,7 @@ private:
         updatePreview();
 
         tabs->addTab(optPage, "Options");
-        tabs->addTab(prevPage, "Preview & CLI");
+        tabs->addTab(prevPage, "Preview && CLI");
         vbox->addWidget(tabs);
 
         auto *btnRow = new QHBoxLayout();
@@ -4497,6 +4576,16 @@ private:
         btnRow->addWidget(btnRun);
         vbox->addLayout(btnRow);
 
+        if (!capturePath.isEmpty()) {
+            dlg.adjustSize();
+            dlg.show();
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const QPixmap modalShot = dlg.grab();
+            dlg.close();
+            return !modalShot.isNull() && modalShot.save(capturePath, "PNG");
+        }
+
         if (dlg.exec() == QDialog::Accepted) {
             const QStringList args = buildArgsList();
             if (args.size() == 1 && !args.first().startsWith('-')) {
@@ -4505,6 +4594,7 @@ private:
                 dispatchTanuki(subcmd, QString(), args);
             }
         }
+        return true;
     }
 
     void openTempestModuleModal(const QString &action) {
@@ -4599,7 +4689,7 @@ private:
         updatePreview();
 
         tabs->addTab(optPage, "Options");
-        tabs->addTab(prevPage, "Preview & CLI");
+        tabs->addTab(prevPage, "Preview && CLI");
         vbox->addWidget(tabs);
 
         auto *btnRow = new QHBoxLayout();
@@ -5404,7 +5494,7 @@ private:
         m_lastContextSig[snap.id] = stableBody;
         m_summarySourceOpId = snap.id;
         if (m_inspectorTitleLabel) {
-            m_inspectorTitleLabel->setText(QString("INSPECTOR :: %1 (%2 :: %3)")
+            m_inspectorTitleLabel->setText(QString("Inspector :: %1 %2 (%3)")
                                                .arg(snap.id, snap.operative, snap.module));
         }
         updateEditorPreservingScroll(m_inspectorSummary, stableBody);
@@ -6457,6 +6547,10 @@ int main(int argc, char **argv) {
     const QCommandLineOption graphShotOpt("graph-screenshot", "Save PNG screenshot of Session Graph view", "path");
     const QCommandLineOption altShotOpt("alt-screenshot", "Save PNG screenshot of secondary Telemetry/Listeners view", "path");
     const QCommandLineOption consoleShotOpt("console-screenshot", "Save PNG screenshot of Operative Console view", "path");
+    const QCommandLineOption vaultShotOpt("vault-screenshot", "Save PNG screenshot of Vault & PKI view", "path");
+    const QCommandLineOption targetsShotOpt("targets-screenshot", "Save PNG screenshot of Targets & Settings view", "path");
+    const QCommandLineOption fleetShotOpt("fleet-screenshot", "Save PNG screenshot of Fleet & History view", "path");
+    const QCommandLineOption modalShotOpt("modal-screenshot", "Save PNG screenshot of Tanuki Module modal", "path");
     parser.addOption(addrOpt);
     parser.addOption(tokenOpt);
     parser.addOption(tokenFileOpt);
@@ -6467,6 +6561,10 @@ int main(int argc, char **argv) {
     parser.addOption(graphShotOpt);
     parser.addOption(altShotOpt);
     parser.addOption(consoleShotOpt);
+    parser.addOption(vaultShotOpt);
+    parser.addOption(targetsShotOpt);
+    parser.addOption(fleetShotOpt);
+    parser.addOption(modalShotOpt);
     parser.process(app);
 
     CielWindow win(
@@ -6485,8 +6583,12 @@ int main(int argc, char **argv) {
         const QString graphShot = parser.value(graphShotOpt);
         const QString altShot = parser.value(altShotOpt);
         const QString consoleShot = parser.value(consoleShotOpt);
-        QTimer::singleShot(100, &win, [&win, tableShot, graphShot, altShot, consoleShot]() {
-            const int rc = win.runSelfTest(tableShot, graphShot, altShot, consoleShot);
+        const QString vaultShot = parser.value(vaultShotOpt);
+        const QString targetsShot = parser.value(targetsShotOpt);
+        const QString fleetShot = parser.value(fleetShotOpt);
+        const QString modalShot = parser.value(modalShotOpt);
+        QTimer::singleShot(100, &win, [&win, tableShot, graphShot, altShot, consoleShot, vaultShot, targetsShot, fleetShot, modalShot]() {
+            const int rc = win.runSelfTest(tableShot, graphShot, altShot, consoleShot, vaultShot, targetsShot, fleetShot, modalShot);
             QApplication::exit(rc);
         });
     } else {

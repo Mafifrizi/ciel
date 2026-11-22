@@ -124,7 +124,7 @@ def frame_desktop_window(shot_img, title_text, icon_path):
     return framed
 
 
-def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_dir):
+def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_dir, extra_shots=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     icon_path = ASSETS / "ciel_icon.png"
@@ -145,6 +145,12 @@ def compose_showcase_images(table_shot, graph_shot, alt_shot, console_shot, out_
     im_console = frame_desktop_window(Image.open(console_shot), "Ciel | Operative Console", icon_path)
     out_console = out_dir / "OperativeConsole.png"
     im_console.convert("RGB").save(out_console, format="PNG")
+
+    if extra_shots:
+        for src_path, filename, title in extra_shots:
+            if src_path and Path(src_path).exists():
+                framed_extra = frame_desktop_window(Image.open(src_path), title, icon_path)
+                framed_extra.convert("RGB").save(out_dir / filename, format="PNG")
 
     win_w, win_h = 1220, int(1220 * im_table.height / im_table.width)
     back_res = im_alt.resize((win_w, win_h), Image.Resampling.LANCZOS)
@@ -247,6 +253,10 @@ def main():
         graph_shot_path = Path(fix_dir) / "ciel_graph_preview.png"
         alt_shot_path = Path(fix_dir) / "ciel_alt_preview.png"
         con_shot_path = Path(fix_dir) / "ciel_console_preview.png"
+        vault_shot_path = Path(fix_dir) / "ciel_vault_preview.png"
+        targets_shot_path = Path(fix_dir) / "ciel_targets_preview.png"
+        fleet_shot_path = Path(fix_dir) / "ciel_fleet_preview.png"
+        modal_shot_path = Path(fix_dir) / "ciel_modal_preview.png"
         token_file = Path(work_dir) / "teamserver.token"
         pki_dir = Path(work_dir) / "pki"
         srv = subprocess.Popen(
@@ -526,6 +536,10 @@ def main():
                     "--graph-screenshot", str(graph_shot_path),
                     "--alt-screenshot", str(alt_shot_path),
                     "--console-screenshot", str(con_shot_path),
+                    "--vault-screenshot", str(vault_shot_path),
+                    "--targets-screenshot", str(targets_shot_path),
+                    "--fleet-screenshot", str(fleet_shot_path),
+                    "--modal-screenshot", str(modal_shot_path),
                 ],
                 env=env,
                 stdout=subprocess.PIPE,
@@ -540,6 +554,10 @@ def main():
                 (graph_shot_path, "graph screenshot"),
                 (alt_shot_path, "alt telemetry screenshot"),
                 (con_shot_path, "console screenshot"),
+                (vault_shot_path, "vault screenshot"),
+                (targets_shot_path, "targets screenshot"),
+                (fleet_shot_path, "fleet screenshot"),
+                (modal_shot_path, "modal screenshot"),
             ):
                 assert src.exists() and src.stat().st_size > 10000, f"Missing or tiny {label}"
                 raw = src.read_bytes()
@@ -547,8 +565,14 @@ def main():
                 print(f"[PASS] native Qt6 ciel-client --self-test {label} ({len(raw)} bytes)")
 
             showcase_dir = ASSETS if os.environ.get("CIEL_UPDATE_ASSETS") == "1" else Path(fix_dir) / "showcase"
+            extra_shots = [
+                (vault_shot_path, "VaultAndPki.png", "Ciel | Shuna Vault & Post-Quantum PKI"),
+                (targets_shot_path, "TargetsAndSettings.png", "Ciel | Targets & Sensor Settings"),
+                (fleet_shot_path, "FleetAndHistory.png", "Ciel | Fleet Hosts & Audit History"),
+                (modal_shot_path, "ModuleModal.png", "Ciel | Module Options & CLI Preview"),
+            ]
             out_graph, out_multi, out_sessions, out_listeners, out_console = compose_showcase_images(
-                shot_path, graph_shot_path, alt_shot_path, con_shot_path, showcase_dir
+                shot_path, graph_shot_path, alt_shot_path, con_shot_path, showcase_dir, extra_shots=extra_shots
             )
             for out_p in (out_graph, out_multi, out_sessions, out_listeners, out_console):
                 assert out_p.exists() and out_p.stat().st_size > 10000, f"Missing or tiny showcase {out_p}"
