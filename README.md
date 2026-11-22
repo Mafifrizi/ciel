@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <i>Ciel is a native desktop command and control console for the Tanuki, Tempest, and Shuna identity runtime ecosystem.</i>
+  <i>Ciel is a native desktop command and control console for the <a href="https://github.com/Mafifrizi/tanuki">Tanuki</a>, <a href="https://github.com/Mafifrizi/tempest">Tempest</a>, and <a href="https://github.com/Mafifrizi/shuna">Shuna</a> identity runtime ecosystem.</i>
 </p>
 
 <p align="center">
