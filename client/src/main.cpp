@@ -2063,9 +2063,21 @@ public:
         }
 
         // Verify real host-safe Tanuki modules + subcommand allowlist rejection
+        const QString cleanKrb5Conf = tempDir.filePath("selftest_krb5.conf");
+        {
+            QFile kf(cleanKrb5Conf);
+            if (!kf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                return fail("Failed creating self-test krb5.conf");
+            }
+            kf.write("[libdefaults]\n    default_realm = LAB.LOCAL\n[realms]\n    LAB.LOCAL = {\n        kdc = 127.0.0.1\n    }\n");
+            kf.close();
+        }
         for (const QString &tCmd : QStringList{"doctor", "ladder", "triage", "nhi", "skill"}) {
             QJsonObject tp;
             tp["subcommand"] = tCmd;
+            if (tCmd == "doctor") {
+                tp["krb5_conf_path"] = cleanKrb5Conf;
+            }
             QJsonObject tResp;
             appendCommandEcho("[GUI -> CLI] tanuki " + tCmd);
             if (!executeAction("tanuki_exec", tp, tResp, false)) {
