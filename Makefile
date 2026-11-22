@@ -35,8 +35,13 @@ deps: | bin
 	fi
 	@if [ "$(TANUKI_MODE)" = "rust" ]; then \
 		if [ ! -x "$(TANUKI_DIR)/target/release/tanuki" ]; then \
-			echo "[deps] Error: TANUKI_MODE=rust requested but $(TANUKI_DIR)/target/release/tanuki not found or not executable"; \
-			exit 1; \
+			if command -v cargo >/dev/null 2>&1; then \
+				echo "[deps] Building Rust tanuki release binary in $(TANUKI_DIR)..."; \
+				cargo build --release --manifest-path "$(TANUKI_DIR)/Cargo.toml" || exit 1; \
+			else \
+				echo "[deps] Error: TANUKI_MODE=rust requested but $(TANUKI_DIR)/target/release/tanuki not found or not executable"; \
+				exit 1; \
+			fi; \
 		fi; \
 		cp -f "$(TANUKI_DIR)/target/release/tanuki" bin/tanuki; \
 	else \
@@ -62,6 +67,10 @@ test-go:
 	cd teamserver && go test -race -count=1 -v ./...
 
 test: all test-go
+	@if [ ! -x "$(TANUKI_DIR)/target/release/tanuki" ] && command -v cargo >/dev/null 2>&1; then \
+		echo "[test] Building Rust tanuki release binary for ecosystem E2E..."; \
+		cargo build --release --manifest-path "$(TANUKI_DIR)/Cargo.toml"; \
+	fi
 	python3 tests/test_ciel.py
 	python3 tests/test_ecosystem_e2e.py
 

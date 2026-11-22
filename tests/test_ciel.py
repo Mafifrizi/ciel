@@ -595,18 +595,21 @@ def main():
     # Verify standalone zero-setup launch: ./bin/ciel auto-spawns mTLS ciel-teamserver and stops it on exit
     auto_port = pick_free_port()
     auto_addr = f"127.0.0.1:{auto_port}"
-    auto_env = os.environ.copy()
-    auto_env["QT_QPA_PLATFORM"] = "offscreen"
-    auto_res = subprocess.run(
-        [CIEL, "--addr", auto_addr, "--self-test"],
-        env=auto_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
-    )
-    assert auto_res.returncode == 0, f"ciel auto-spawn --self-test failed ({auto_res.returncode}): {auto_res.stdout}\n{auto_res.stderr}"
-    assert "QIODevice::read" not in auto_res.stderr, f"Unexpected QSslSocket stderr warning: {auto_res.stderr}"
+    with tempfile.TemporaryDirectory(prefix="ciel-auto-xdg-") as auto_xdg:
+        auto_env = os.environ.copy()
+        auto_env["QT_QPA_PLATFORM"] = "offscreen"
+        auto_env["XDG_RUNTIME_DIR"] = auto_xdg
+        auto_res = subprocess.run(
+            [CIEL, "--addr", auto_addr, "--self-test"],
+            env=auto_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+        )
+        assert auto_res.returncode == 0, f"ciel auto-spawn --self-test failed ({auto_res.returncode}): {auto_res.stdout}\n{auto_res.stderr}"
+        assert "QIODevice::read" not in auto_res.stderr, f"Unexpected QSslSocket stderr warning: {auto_res.stderr}"
+        assert (Path(auto_xdg) / "ciel_workspace" / "pki" / "ca.crt").exists(), "Cold-start auto-spawn did not create PKI ca.crt"
     try:
         with socket.create_connection(("127.0.0.1", auto_port), timeout=0.4):
             raise AssertionError("Auto-spawned ciel-teamserver did not terminate cleanly on exit")

@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
@@ -1818,9 +1819,9 @@ public:
         if (m_localArch.isEmpty()) {
             m_localArch = "x86_64";
         }
-        const QString xdgRuntime = qEnvironmentVariable("XDG_RUNTIME_DIR");
-        if (!xdgRuntime.isEmpty()) {
-            m_workDir = xdgRuntime + "/ciel_workspace";
+        const QString xdgRuntime = qEnvironmentVariable("XDG_RUNTIME_DIR").trimmed();
+        if (!xdgRuntime.isEmpty() && QDir::isAbsolutePath(xdgRuntime)) {
+            m_workDir = QDir::cleanPath(xdgRuntime + "/ciel_workspace");
         } else {
             const QString cacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
             const QString uidSuffix = (m_localUid != "-" && !m_localUid.isEmpty()) ? ("_" + m_localUid) : QString();
@@ -5856,11 +5857,18 @@ private:
             return false;
         }
 
+        QPointer<CielWindow> safeThis(this);
         if (probeTcpNonBlocking(host, port, 180)) {
+            if (!safeThis) {
+                return false;
+            }
             if (m_authToken.isEmpty()) {
                 m_authToken = loadAuthTokenFromDisk();
             }
             return true;
+        }
+        if (!safeThis) {
+            return false;
         }
 
         if (host != "127.0.0.1" && host != "localhost" && host != "::1") {
@@ -5911,8 +5919,15 @@ private:
             }
         }
 
-        for (int attempt = 0; attempt < 25; ++attempt) {
+        constexpr qint64 kStartupTimeoutMs = 15000;
+        QElapsedTimer waitTimer;
+        waitTimer.start();
+
+        while (true) {
             if (probeTcpNonBlocking(host, port, 150)) {
+                if (!safeThis) {
+                    return false;
+                }
                 if (!m_loggedManagedBoot) {
                     m_loggedManagedBoot = true;
                     appendEventLog("+", "#10B981",
@@ -5921,13 +5936,37 @@ private:
                 }
                 return true;
             }
-            if (m_managedServer->state() == QProcess::NotRunning) {
-                appendEventLog("!", "#EF4444", "Managed ciel-teamserver exited before listening");
+            if (!safeThis || !m_managedServer) {
                 return false;
             }
+            if (m_managedServer->state() == QProcess::NotRunning || m_managedServer->waitForFinished(0)) {
+                const QString childOut = QString::fromUtf8(m_managedServer->readAllStandardOutput()).trimmed();
+                QString exitMsg = QStringLiteral("Managed ciel-teamserver exited before listening");
+                if (!childOut.isEmpty()) {
+                    const QString snippet = childOut.length() > 300 ? childOut.right(300) : childOut;
+                    exitMsg += ": " + htmlEsc(snippet);
+                }
+                appendEventLog("!", "#EF4444", exitMsg);
+                return false;
+            }
+            const qint64 remainingMs = kStartupTimeoutMs - waitTimer.elapsed();
+            if (remainingMs <= 0) {
+                break;
+            }
             QEventLoop pauseLoop;
-            QTimer::singleShot(100, &pauseLoop, &QEventLoop::quit);
+            QTimer::singleShot(static_cast<int>(qMin<qint64>(100, remainingMs)), &pauseLoop, &QEventLoop::quit);
+            QObject::connect(m_managedServer, &QProcess::finished, &pauseLoop, &QEventLoop::quit);
             pauseLoop.exec();
+            if (!safeThis) {
+                return false;
+            }
+        }
+        if (m_managedServer && m_managedServer->state() != QProcess::NotRunning) {
+            m_managedServer->terminate();
+            if (!m_managedServer->waitForFinished(1000)) {
+                m_managedServer->kill();
+                m_managedServer->waitForFinished(500);
+            }
         }
         appendEventLog("!", "#EF4444", "Timed out waiting for managed ciel-teamserver on " + htmlEsc(m_serverAddr));
         return false;

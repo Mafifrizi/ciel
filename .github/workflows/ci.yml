@@ -10,6 +10,9 @@ jobs:
   build-and-test:
     name: Build & Verify Ciel Stack
     runs-on: ubuntu-latest
+    env:
+      TANUKI_MODE: rust
+      QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -19,6 +22,9 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: teamserver/go.sum
+
+      - name: Set up Rust Stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install Build, Qt6, and PostgreSQL Dependencies
         run: |
