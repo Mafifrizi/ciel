@@ -11,7 +11,8 @@
 <p align="center">
   <a href="docs/ARCHITECTURE.md">Architecture</a> |
   <a href="docs/USAGE.md">Usage</a> |
-  <a href="docs/COMMANDS.md">Commands</a>
+  <a href="docs/COMMANDS.md">Commands</a> |
+  <a href="#contributors">Contributors</a>
 </p>
 
 <br>
@@ -43,3 +44,14 @@ Ciel pairs a compiled C++20 Qt6 desktop client with a Go teamserver over post-qu
 - [Architecture, Cryptography, and PostgreSQL Schema](docs/ARCHITECTURE.md)
 - [Building, PostgreSQL TLS Provisioning, and Operator Workflow](docs/USAGE.md)
 - [Operative Console Commands](docs/COMMANDS.md)
+
+## Contributors
+
+<p align="left">
+  <a href="https://github.com/Mafifrizi/ciel/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=Mafifrizi/ciel" alt="Contributors" />
+  </a>
+</p>
+
+- **Muhammad Afif Rizi** ([@Mafifrizi](https://github.com/Mafifrizi))
+- **Muhamad Dian Alvito**
